@@ -42,7 +42,7 @@ async def send_question():
 
 # Scheduler function to check and send questions
 async def schedule_questions():
-    last_sent_dates = {"08:00": None, "12:00": None, "18:00": None}
+    last_sent_dates = {"08:00": None, "12:00": None, "16:20": None}
 
     while True:
         now = datetime.now(GAZA_TZ)
