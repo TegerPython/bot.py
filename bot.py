@@ -127,7 +127,7 @@ def send_heartbeat():
 
 # ✅ New: Time-based Scheduler (independent thread)
 def background_scheduler():
-    question_times = ["08:00", "12:00", "17:29"]  # Gaza times for questions
+    question_times = ["08:00", "12:00", "17:31"]  # Gaza times for questions
     last_posted = None
 
     while True:
