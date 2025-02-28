@@ -1,8 +1,10 @@
 import os
 import json
 import random
+import threading
+import time
 import pytz
-from datetime import datetime, timedelta
+from datetime import datetime
 from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import CommandHandler, CallbackQueryHandler, Dispatcher
@@ -11,12 +13,15 @@ app = Flask(__name__)
 
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 OWNER_ID = int(os.getenv('OWNER_TELEGRAM_ID'))
-CHANNEL_ID = os.getenv('CHANNEL_ID')  # Use -100xxxxxxxx format
+CHANNEL_ID = os.getenv('CHANNEL_ID')  # Example: -1001234567890
 WEBHOOK_URL = os.getenv('RENDER_WEBHOOK_URL')
 
 bot = Bot(token=TOKEN)
 
-# Tracking states
+# Dispatcher (for webhook handling)
+dispatcher = Dispatcher(bot, None, workers=4)
+
+# Track current question
 questions = [
     {
         "question": "What is the past tense of 'go'?",
@@ -31,18 +36,13 @@ questions = [
         "explanation": "'Joyful' is a synonym for 'happy'."
     }
 ]
+
 current_question = None
 answered_users = {}
+first_correct_user = None
 
 # Gaza timezone
 gaza_tz = pytz.timezone('Asia/Gaza')
-
-# Dispatcher setup (used for handling commands via webhook)
-dispatcher = Dispatcher(bot, None, workers=4)
-
-# Anti-cheating: Track user answers
-user_answers = {}
-first_correct_user = None
 
 @app.route('/')
 def home():
@@ -60,15 +60,12 @@ def start(update, context):
 def post_question():
     global current_question, answered_users, first_correct_user
 
-    if not questions:
-        return
-
     current_question = random.choice(questions)
     answered_users = {}
     first_correct_user = None
 
     keyboard = [
-        [InlineKeyboardButton(opt, callback_data=str(idx))] for idx, opt in enumerate(current_question["options"])
+        [InlineKeyboardButton(opt, callback_data=str(idx))] for idx, opt in enumerate(current_question['options'])
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -98,7 +95,7 @@ def handle_answer(update, context):
     else:
         query.answer("❌ Wrong! No second chances.")
 
-    if len(answered_users) == 1:  # First answer triggers explanation update
+    if len(answered_users) == 1:
         edit_question_message()
 
 def edit_question_message():
@@ -114,49 +111,53 @@ def edit_question_message():
 
     bot.send_message(chat_id=CHANNEL_ID, text=text)
 
-# Scheduler Setup
-def schedule_questions(context):
-    now = datetime.now(gaza_tz)
-    times = [
-        now.replace(hour=8, minute=0, second=0, microsecond=0),
-        now.replace(hour=12, minute=0, second=0, microsecond=0),
-        now.replace(hour=17, minute=20, second=0, microsecond=0),
-    ]
-
-    for t in times:
-        if t < now:
-            t += timedelta(days=1)
-        context.job_queue.run_once(lambda ctx: post_question(), t)
-
-# Heartbeat System
+# 🔔 Heartbeat System
 heartbeat_toggle = True
 
-def send_heartbeat(context):
+def send_heartbeat():
     global heartbeat_toggle
+    try:
+        if heartbeat_toggle:
+            bot.send_message(OWNER_ID, "✅ Bot Heartbeat - Code 1 - Bot is Running.")
+        else:
+            bot.send_message(OWNER_ID, "✅ Bot Heartbeat - Code 2 - Bot is Running.")
+        heartbeat_toggle = not heartbeat_toggle
+    except Exception as e:
+        print(f"Failed to send heartbeat: {e}")
 
-    if heartbeat_toggle:
-        bot.send_message(OWNER_ID, "✅ Bot Heartbeat - Code 1 - Bot is Running.")
-    else:
-        bot.send_message(OWNER_ID, "✅ Bot Heartbeat - Code 2 - Bot is Running.")
+# ✅ New: Time-based Scheduler (independent thread)
+def background_scheduler():
+    question_times = ["08:00", "12:00", "18:00"]  # Gaza times for questions
+    last_posted = None
 
-    heartbeat_toggle = not heartbeat_toggle
+    while True:
+        now = datetime.now(gaza_tz)
+        current_time_str = now.strftime("%H:%M")
+
+        # Check and post questions
+        if current_time_str in question_times and current_time_str != last_posted:
+            post_question()
+            last_posted = current_time_str
+
+        # Heartbeat every 60 seconds
+        send_heartbeat()
+
+        time.sleep(60)
 
 def main():
     bot.set_webhook(f'{WEBHOOK_URL}/{TOKEN}')
 
-    # Add command handlers
+    # Command handlers for webhook
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(CallbackQueryHandler(handle_answer))
 
-    # Send initial heartbeat
-    bot.send_message(OWNER_ID, "✅ Bot is starting up on Render.")
+    bot.send_message(OWNER_ID, "✅ Bot is starting up on Render with new time-based scheduler.")
 
-    # Set up repeating jobs (question schedule + heartbeat)
-    job_queue = dispatcher.job_queue
-    job_queue.run_repeating(send_heartbeat, interval=60, first=0)
-    job_queue.run_once(schedule_questions, when=10)
+    # Start the background scheduler thread
+    scheduler_thread = threading.Thread(target=background_scheduler, daemon=True)
+    scheduler_thread.start()
 
-    print("Bot started with webhook.")
+    print("Bot started with webhook + background scheduler.")
 
 if __name__ == '__main__':
     main()
