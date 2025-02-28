@@ -1,46 +1,70 @@
 import os
-import time
-import threading
 import logging
-from telegram import Bot, Update
-from telegram.ext import Updater, CommandHandler, CallbackContext
+import asyncio
+from datetime import datetime, time
+import pytz
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
-# Get environment variables (Render supports these easily)
+# Load bot token and channel ID from environment variables
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-OWNER_ID = os.getenv("OWNER_TELEGRAM_ID")  # Your Telegram ID for heartbeat messages
+CHANNEL_ID = os.getenv("CHANNEL_ID")  # Example: -1001234567890 (for channels)
 
-logging.basicConfig(level=logging.INFO)
+# Setup bot
+bot = Bot(TOKEN)
 
-heartbeat_code = 1  # To alternate between Code 1 and 2
+# Set Gaza timezone
+GAZA_TZ = pytz.timezone('Asia/Gaza')
 
-def send_heartbeat():
-    global heartbeat_code
+# Sample question (for now, hardcoded - we’ll load real questions later)
+QUESTION = "What is the past tense of 'go'?"
+OPTIONS = [
+    ("A) Goed", "A"),
+    ("B) Went", "B"),
+    ("C) Goes", "C"),
+    ("D) Going", "D")
+]
+CORRECT_ANSWER = "B"
 
-    bot = Bot(TOKEN)
+# Function to send question to channel
+async def send_question():
+    keyboard = [
+        [InlineKeyboardButton(text, callback_data=callback) for text, callback in OPTIONS]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    message = await bot.send_message(
+        chat_id=CHANNEL_ID,
+        text=f"📚 Daily English Question:\n\n{QUESTION}",
+        reply_markup=reply_markup
+    )
+    logging.info(f"Question sent to channel {CHANNEL_ID}.")
+    return message.message_id
+
+# Scheduler function to check and send questions
+async def schedule_questions():
+    last_sent_dates = {"08:00": None, "12:00": None, "18:00": None}
+
     while True:
-        try:
-            bot.send_message(
-                chat_id=OWNER_ID,
-                text=f"✅ Bot Heartbeat - Code {heartbeat_code} - Bot is Running."
-            )
-            heartbeat_code = 2 if heartbeat_code == 1 else 1
-            time.sleep(60)
-        except Exception as e:
-            logging.error(f"Heartbeat failed: {e}")
-            time.sleep(30)
+        now = datetime.now(GAZA_TZ)
+        current_time = now.strftime("%H:%M")
 
-def start(update: Update, context: CallbackContext):
-    update.message.reply_text("Hello! I'm your Telegram bot running on Render.")
+        if current_time in last_sent_dates and last_sent_dates[current_time] != now.date():
+            await send_question()
+            last_sent_dates[current_time] = now.date()
+            logging.info(f"Question sent at {current_time} Gaza time.")
 
-def main():
-    updater = Updater(TOKEN, use_context=True)
-    dp = updater.dispatcher
-    dp.add_handler(CommandHandler("start", start))
+        await asyncio.sleep(30)  # Check every 30 seconds
 
-    threading.Thread(target=send_heartbeat, daemon=True).start()
+# Main bot loop (placeholder - future message handling will be here)
+async def main():
+    logging.basicConfig(level=logging.INFO)
 
-    updater.start_polling()
-    updater.idle()
+    # Start the daily question scheduler
+    asyncio.create_task(schedule_questions())
 
-if __name__ == "__main__":
-    main()
+    # Keep bot running (will be replaced with actual handlers later)
+    while True:
+        await asyncio.sleep(3600)
+
+if __name__ == '__main__':
+    asyncio.run(main())
