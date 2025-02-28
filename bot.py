@@ -126,7 +126,7 @@ def main():
     # Scheduling - Gaza Time (UTC+2)
     scheduler.add_job(send_daily_question, "cron", hour=8, minute=0, timezone="Asia/Gaza", args=[application])
     scheduler.add_job(send_daily_question, "cron", hour=12, minute=0, timezone="Asia/Gaza", args=[application])
-    scheduler.add_job(send_daily_question, "cron", hour=17, minute=55, timezone="Asia/Gaza", args=[application])
+    scheduler.add_job(send_daily_question, "cron", hour=17, minute=54, timezone="Asia/Gaza", args=[application])
     scheduler.add_job(send_leaderboard_summary, "cron", hour=23, minute=59, timezone="Asia/Gaza", args=[application])
 
     # Heartbeat every 60 minutes
