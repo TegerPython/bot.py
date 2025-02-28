@@ -111,7 +111,7 @@ async def announce_correct_answer():
 
 # Daily scheduler (3 times a day)
 async def schedule_questions():
-    last_sent_dates = {"08:00": None, "12:00": None, "16:26": None}
+    last_sent_dates = {"08:00": None, "12:00": None, "16:28": None}
 
     while True:
         now = datetime.now(GAZA_TZ)
