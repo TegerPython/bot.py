@@ -120,7 +120,7 @@ def schedule_questions(context):
     times = [
         now.replace(hour=8, minute=0, second=0, microsecond=0),
         now.replace(hour=12, minute=0, second=0, microsecond=0),
-        now.replace(hour=18, minute=0, second=0, microsecond=0),
+        now.replace(hour=17, minute=20, second=0, microsecond=0),
     ]
 
     for t in times:
