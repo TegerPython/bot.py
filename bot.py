@@ -155,7 +155,7 @@ scheduler.add_job(send_heartbeat, 'interval', minutes=1)
 
 scheduler.add_job(send_question, 'cron', hour=8, minute=0)
 scheduler.add_job(send_question, 'cron', hour=12, minute=0)
-scheduler.add_job(send_question, 'cron', hour=17, minute=12)
+scheduler.add_job(send_question, 'cron', hour=5, minute=14)
 
 scheduler.add_job(show_leaderboard, 'cron', hour=18, minute=30)
 
