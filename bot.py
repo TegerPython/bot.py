@@ -101,7 +101,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 def schedule_jobs(app: Application):
     app.job_queue.run_daily(send_question, time=datetime.time(hour=8, minute=0, tzinfo=GAZA_TZ))
     app.job_queue.run_daily(send_question, time=datetime.time(hour=12, minute=0, tzinfo=GAZA_TZ))
-    app.job_queue.run_daily(send_question, time=datetime.time(hour=17, minute=40, tzinfo=GAZA_TZ))
+    app.job_queue.run_daily(send_question, time=datetime.time(hour=17, minute=46, tzinfo=GAZA_TZ))
 
     app.job_queue.run_repeating(heartbeat_task, interval=60, first=10)
 
