@@ -1,165 +1,162 @@
 import os
-import logging
-from flask import Flask, request, jsonify
-from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CommandHandler, CallbackQueryHandler, Dispatcher
+import json
+import random
 import pytz
-from apscheduler.schedulers.background import BackgroundScheduler
-from datetime import datetime
+from datetime import datetime, timedelta
+from flask import Flask, request, jsonify
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
+from telegram.ext import CommandHandler, CallbackQueryHandler, Dispatcher
 
-# Environment variables (double-checked with your setup)
-BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-CHANNEL_ID = os.getenv('CHANNEL_ID')
-OWNER_ID = int(os.getenv('OWNER_TELEGRAM_ID'))
-WEBHOOK_URL = os.getenv('RENDER_WEBHOOK_URL')
-
-# Flask app for webhook
 app = Flask(__name__)
 
-# Telegram bot and dispatcher
-bot = Bot(token=BOT_TOKEN)
-dispatcher = Dispatcher(bot, None, use_context=True)
+TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+OWNER_ID = int(os.getenv('OWNER_TELEGRAM_ID'))
+CHANNEL_ID = os.getenv('CHANNEL_ID')  # Use -100xxxxxxxx format
+WEBHOOK_URL = os.getenv('RENDER_WEBHOOK_URL')
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
+bot = Bot(token=TOKEN)
 
-# Timezone for Gaza
-GAZA_TZ = pytz.timezone('Asia/Gaza')
-
-# Global state for heartbeat alternation
-heartbeat_code = 1
-first_correct_responder = None
-current_question = None
-current_correct_answer = None
-answered_users = set()
-question_counter = 0
-daily_scores = {}
-
-# Question pool (can be expanded)
+# Tracking states
 questions = [
     {
-        'question': "What is the plural of 'child'?",
-        'options': ['Childs', 'Children', 'Childes'],
-        'correct': 'Children',
-        'explanation': "The correct plural of 'child' is 'children'."
+        "question": "What is the past tense of 'go'?",
+        "options": ["goes", "went", "gone", "going"],
+        "correct": 1,
+        "explanation": "The past tense of 'go' is 'went'."
     },
     {
-        'question': "Which word is a noun?",
-        'options': ['Run', 'Beautiful', 'Car'],
-        'correct': 'Car',
-        'explanation': "A car is a thing, making it a noun."
-    },
-    {
-        'question': "What is the past tense of 'go'?",
-        'options': ['Goed', 'Went', 'Gone'],
-        'correct': 'Went',
-        'explanation': "The past tense of 'go' is 'went'."
+        "question": "Which is a synonym for 'happy'?",
+        "options": ["sad", "angry", "joyful", "tired"],
+        "correct": 2,
+        "explanation": "'Joyful' is a synonym for 'happy'."
     }
 ]
+current_question = None
+answered_users = {}
 
-@app.route('/webhook', methods=['POST'])
+# Gaza timezone
+gaza_tz = pytz.timezone('Asia/Gaza')
+
+# Dispatcher setup (used for handling commands via webhook)
+dispatcher = Dispatcher(bot, None, workers=4)
+
+# Anti-cheating: Track user answers
+user_answers = {}
+first_correct_user = None
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+@app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
     update = Update.de_json(request.get_json(force=True), bot)
     dispatcher.process_update(update)
-    return 'ok'
+    return "ok", 200
 
-def send_heartbeat():
-    global heartbeat_code
-    message = f"✅ Bot Heartbeat - Code {heartbeat_code} - Bot is Running."
-    bot.send_message(chat_id=OWNER_ID, text=message)
-    heartbeat_code = 2 if heartbeat_code == 1 else 1
+def start(update, context):
+    update.message.reply_text("Hello! I'm your English Quiz Bot running on Render.")
 
-def send_question():
-    global current_question, current_correct_answer, first_correct_responder, answered_users, question_counter
+def post_question():
+    global current_question, answered_users, first_correct_user
 
-    first_correct_responder = None
-    answered_users = set()
+    if not questions:
+        return
 
-    if question_counter >= len(questions):
-        question_counter = 0
+    current_question = random.choice(questions)
+    answered_users = {}
+    first_correct_user = None
 
-    current_question = questions[question_counter]
-    current_correct_answer = current_question['correct']
-
-    keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in current_question['options']]
+    keyboard = [
+        [InlineKeyboardButton(opt, callback_data=str(idx))] for idx, opt in enumerate(current_question["options"])
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     bot.send_message(
         chat_id=CHANNEL_ID,
-        text=f"📚 Question Time!\n\n{current_question['question']}",
+        text=f"📚 English Question Time!\n\n{current_question['question']}",
         reply_markup=reply_markup
     )
 
-    question_counter += 1
-
-def answer_callback(update, context):
-    global first_correct_responder
+def handle_answer(update, context):
+    global first_correct_user
 
     query = update.callback_query
     user_id = query.from_user.id
-    username = query.from_user.first_name
 
     if user_id in answered_users:
-        query.answer("You have already answered this question!")
+        query.answer("You've already answered this question!")
         return
 
-    answered_users.add(user_id)
+    user_choice = int(query.data)
+    answered_users[user_id] = user_choice
 
-    if query.data == current_correct_answer:
-        if first_correct_responder is None:
-            first_correct_responder = username
-            daily_scores[username] = daily_scores.get(username, 0) + 1
-
-        bot.edit_message_text(
-            chat_id=query.message.chat_id,
-            message_id=query.message.message_id,
-            text=f"✅ Correct Answer: {current_correct_answer}\n\n"
-                 f"🏅 First correct responder: {first_correct_responder}\n\n"
-                 f"ℹ️ Explanation: {current_question['explanation']}"
-        )
+    if user_choice == current_question['correct']:
+        if first_correct_user is None:
+            first_correct_user = query.from_user.first_name
+        query.answer("✅ Correct!")
     else:
-        query.answer("❌ Wrong answer. Better luck next time!")
-        query.edit_message_reply_markup(reply_markup=None)
+        query.answer("❌ Wrong! No second chances.")
 
-def show_leaderboard():
-    if not daily_scores:
-        bot.send_message(chat_id=CHANNEL_ID, text="📊 No players have scored today.")
-        return
+    if len(answered_users) == 1:  # First answer triggers explanation update
+        edit_question_message()
 
-    sorted_scores = sorted(daily_scores.items(), key=lambda x: x[1], reverse=True)
-    leaderboard_text = "📊 Daily Leaderboard:\n\n"
+def edit_question_message():
+    correct_option = current_question['options'][current_question['correct']]
+    explanation = current_question['explanation']
 
-    for i, (name, score) in enumerate(sorted_scores[:3]):
-        medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉"
-        leaderboard_text += f"{medal} {name}: {score} points\n"
+    text = f"📚 English Question Time!\n\n{current_question['question']}\n\n"
+    text += f"✅ Correct Answer: {correct_option}\n\n"
+    text += f"📖 Explanation: {explanation}\n\n"
 
-    for name, score in sorted_scores[3:]:
-        leaderboard_text += f"{name}: {score} points\n"
+    if first_correct_user:
+        text += f"🏅 First Correct Answer: {first_correct_user}"
 
-    bot.send_message(chat_id=CHANNEL_ID, text=leaderboard_text)
+    bot.send_message(chat_id=CHANNEL_ID, text=text)
 
-    # Reset scores for the next day
-    daily_scores.clear()
+# Scheduler Setup
+def schedule_questions(context):
+    now = datetime.now(gaza_tz)
+    times = [
+        now.replace(hour=8, minute=0, second=0, microsecond=0),
+        now.replace(hour=12, minute=0, second=0, microsecond=0),
+        now.replace(hour=18, minute=0, second=0, microsecond=0),
+    ]
 
-def start(update, context):
-    update.message.reply_text("Hello! I'm your Telegram bot running on Render.")
+    for t in times:
+        if t < now:
+            t += timedelta(days=1)
+        context.job_queue.run_once(lambda ctx: post_question(), t)
 
-# Add command and callback handlers
-dispatcher.add_handler(CommandHandler('start', start))
-dispatcher.add_handler(CallbackQueryHandler(answer_callback))
+# Heartbeat System
+heartbeat_toggle = True
 
-# Scheduler for timed events
-scheduler = BackgroundScheduler(timezone=GAZA_TZ)
+def send_heartbeat(context):
+    global heartbeat_toggle
 
-scheduler.add_job(send_heartbeat, 'interval', minutes=1)
+    if heartbeat_toggle:
+        bot.send_message(OWNER_ID, "✅ Bot Heartbeat - Code 1 - Bot is Running.")
+    else:
+        bot.send_message(OWNER_ID, "✅ Bot Heartbeat - Code 2 - Bot is Running.")
 
-scheduler.add_job(send_question, 'cron', hour=8, minute=0)
-scheduler.add_job(send_question, 'cron', hour=12, minute=0)
-scheduler.add_job(send_question, 'cron', hour=5, minute=15)
+    heartbeat_toggle = not heartbeat_toggle
 
-scheduler.add_job(show_leaderboard, 'cron', hour=18, minute=30)
+def main():
+    bot.set_webhook(f'{WEBHOOK_URL}/{TOKEN}')
 
-scheduler.start()
+    # Add command handlers
+    dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(CallbackQueryHandler(handle_answer))
+
+    # Send initial heartbeat
+    bot.send_message(OWNER_ID, "✅ Bot is starting up on Render.")
+
+    # Set up repeating jobs (question schedule + heartbeat)
+    job_queue = dispatcher.job_queue
+    job_queue.run_repeating(send_heartbeat, interval=60, first=0)
+    job_queue.run_once(schedule_questions, when=10)
+
+    print("Bot started with webhook.")
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+    main()
