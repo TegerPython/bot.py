@@ -1,152 +1,135 @@
-import os
 import logging
-import asyncio
-from datetime import datetime, date
+import os
+import random
 import pytz
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CallbackQueryHandler, ContextTypes
+from datetime import datetime, time
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackContext, ContextTypes, CallbackQueryHandler
 
-# Load environment variables
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")  # Example: -1001234567890
-ADMIN_ID = os.getenv("ADMIN_ID")  # Optional, for heartbeat if needed
+# Logging
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
+# Environment Variables (set in Render)
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID")  # Should be like: -100xxxxxxxxx
+ADMIN_ID = os.getenv("ADMIN_ID")  # Your personal Telegram ID for heartbeat updates
 
-# Timezone (Gaza/Palestine)
-GAZA_TZ = pytz.timezone('Asia/Gaza')
+# Timezone
+GAZA_TZ = pytz.timezone("Asia/Gaza")
 
-# Bot & Application
-bot = Bot(TOKEN)
-application = Application.builder().token(TOKEN).build()
-
-# Active question data
-current_question = None
-current_message_id = None
-correct_answer = None
-answer_explanation = None
-first_correct_user = None
-
-# Track user answers to prevent retry (anti-cheat)
-answered_users = set()
-
-
-# Example question - replace later with dynamic system
-QUESTION = "What is the past tense of 'go'?"
-OPTIONS = [
-    ("A) Goed", "A"),
-    ("B) Went", "B"),
-    ("C) Goes", "C"),
-    ("D) Going", "D")
+# Game Data
+questions = [
+    {"question": "What is the synonym of 'Happy'?", "options": ["Sad", "Joyful", "Tired", "Angry"], "answer": "Joyful", "explanation": "Joyful means happy."},
+    {"question": "What is the past tense of 'Go'?", "options": ["Gone", "Went", "Goed", "Go"], "answer": "Went", "explanation": "Went is the correct past tense."},
+    {"question": "Which word is a noun?", "options": ["Run", "Beautiful", "Apple", "Quickly"], "answer": "Apple", "explanation": "Apple is a noun."}
 ]
-correct_answer = "B"
-answer_explanation = "The correct past tense of 'go' is 'went'."
+asked_questions = {}
+answered_users = {}
 
+# Initialize App
+app = Application.builder().token(BOT_TOKEN).updater(None).build()
+
+# Heartbeat alternating counter
+heartbeat_counter = 0
+
+# Helper - Send to Channel
 async def send_question():
-    global current_question, current_message_id, correct_answer, answer_explanation, first_correct_user, answered_users
+    global asked_questions, answered_users
 
-    current_question = QUESTION
-    first_correct_user = None
-    answered_users = set()
+    question = random.choice(questions)
+    asked_questions[question['question']] = question
+    answered_users[question['question']] = {}
 
-    keyboard = [
-        [InlineKeyboardButton(text, callback_data=callback) for text, callback in OPTIONS]
-    ]
+    keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in question['options']]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    message = await bot.send_message(
+    await app.bot.send_message(
         chat_id=CHANNEL_ID,
-        text=f"📚 Daily English Question:\n\n{current_question}",
+        text=f"📚 Question Time!\n\n{question['question']}",
         reply_markup=reply_markup
     )
 
-    current_message_id = message.message_id
-    logging.info(f"Question sent to channel at {datetime.now(GAZA_TZ)}")
-
-# Handle button clicks (answers)
-async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global first_correct_user
-
+# Callback for Button Answers
+async def button_callback(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     user_id = query.from_user.id
     user_name = query.from_user.first_name
+    data = query.data
 
-    if user_id in answered_users:
-        await query.answer("❌ You have already answered this question.")
-        return
+    message = query.message.text
 
-    user_answer = query.data
+    for question, details in asked_questions.items():
+        if question in message:
+            if user_id in answered_users[question]:
+                await query.answer("You already answered!")
+                return
 
-    if user_answer == correct_answer:
-        if first_correct_user is None:
-            first_correct_user = user_name
-            await announce_correct_answer()
+            correct_answer = details['answer']
+            explanation = details['explanation']
 
-        await query.answer("✅ Correct! Well done.")
-    else:
-        await query.answer("❌ Incorrect! You can't try again.")
+            if data == correct_answer:
+                if "first_correct" not in details:
+                    details["first_correct"] = user_name
+                    text = f"✅ Correct Answer: {correct_answer}\n🏅 First Correct: {user_name}\n\nℹ️ {explanation}"
+                else:
+                    text = f"✅ Correct Answer: {correct_answer}\n🏅 First Correct: {details['first_correct']}\n\nℹ️ {explanation}"
+            else:
+                text = f"❌ Wrong Answer.\n✅ Correct Answer: {correct_answer}\n\nℹ️ {explanation}"
 
-    answered_users.add(user_id)
+            answered_users[question][user_id] = data
 
-# Edit the message to show correct answer & explanation
-async def announce_correct_answer():
-    global current_message_id, first_correct_user
+            await query.edit_message_text(text=text)
+            return
 
-    explanation_text = (
-        f"✅ Correct Answer: {correct_answer}\n\n"
-        f"ℹ️ Explanation: {answer_explanation}\n\n"
-        f"🏅 First Correct Answer: {first_correct_user}\n\n"
-        "🔔 Stay tuned for the next question!"
-    )
+# Daily Scheduler
+async def daily_scheduler(context: ContextTypes.DEFAULT_TYPE):
+    now = datetime.now(GAZA_TZ).time()
+    times = [time(8, 0), time(12, 0), time(18, 0)]
 
-    try:
-        await bot.edit_message_text(
-            chat_id=CHANNEL_ID,
-            message_id=current_message_id,
-            text=f"📚 Daily English Question:\n\n{current_question}\n\n{explanation_text}"
-        )
-    except Exception as e:
-        logging.error(f"Failed to edit message: {e}")
+    if now in times:
+        await send_question()
 
-# Daily scheduler (3 times a day)
-async def schedule_questions():
-    last_sent_dates = {"08:00": None, "12:00": None, "16:28": None}
+# Heartbeat Function
+async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
+    global heartbeat_counter
 
-    while True:
-        now = datetime.now(GAZA_TZ)
-        current_time = now.strftime("%H:%M")
+    code_number = 1 if heartbeat_counter % 2 == 0 else 2
+    heartbeat_counter += 1
 
-        if current_time in last_sent_dates and last_sent_dates[current_time] != date.today():
-            await send_question()
-            last_sent_dates[current_time] = date.today()
+    if ADMIN_ID:
+        await app.bot.send_message(chat_id=ADMIN_ID, text=f"✅ Bot Heartbeat - Code {code_number} - Bot is Running.")
 
-        await asyncio.sleep(30)
+# Start Command (just for DM testing, not needed for channel work)
+async def start(update: Update, context: CallbackContext) -> None:
+    await update.message.reply_text("Hello! I'm your Telegram bot running on Render.")
 
-# Heartbeat system - optional
-async def heartbeat():
-    if not ADMIN_ID:
-        return
-    codes = ["Code 1", "Code 2"]
-    index = 0
+# Webhook Endpoint (for Render to trigger)
+async def webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await app.update_queue.put(update)
 
-    while True:
-        try:
-            await bot.send_message(chat_id=ADMIN_ID, text=f"✅ Bot Heartbeat - {codes[index]} - Bot is Running.")
-            index = 1 - index  # Alternate between 0 and 1
-        except Exception as e:
-            logging.error(f"Failed to send heartbeat: {e}")
+# Webhook Setup Function
+async def set_webhook():
+    webhook_url = os.getenv("RENDER_WEBHOOK_URL")
+    await app.bot.set_webhook(f"{webhook_url}/webhook")
 
-        await asyncio.sleep(60)
-
-# Start bot
+# Main Function
 async def main():
-    application.add_handler(CallbackQueryHandler(handle_answer))
+    await set_webhook()
 
-    asyncio.create_task(schedule_questions())
-    asyncio.create_task(heartbeat())
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_callback))
 
-    await application.run_polling()
+    # Daily question scheduler
+    app.job_queue.run_repeating(daily_scheduler, interval=60, first=1)
 
+    # Heartbeat every minute
+    app.job_queue.run_repeating(heartbeat, interval=60, first=5)
+
+    await app.start()
+    await app.updater.start_polling()  # Only for local debugging, not used on Render
+    await app.idle()
+
+# Start the app
 if __name__ == '__main__':
+    import asyncio
     asyncio.run(main())
