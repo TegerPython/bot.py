@@ -1,163 +1,126 @@
 import os
-import json
-import random
-import threading
-import time
-import pytz
-from datetime import datetime
+import logging
 from flask import Flask, request, jsonify
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
-from telegram.ext import CommandHandler, CallbackQueryHandler, Dispatcher
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
+import pytz
+import datetime
 
+# Load environment variables
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
+WEBHOOK_URL = os.getenv("RENDER_WEBHOOK_URL")
+
+# Logging
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Flask app for webhook
 app = Flask(__name__)
 
-TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-OWNER_ID = int(os.getenv('OWNER_TELEGRAM_ID'))
-CHANNEL_ID = os.getenv('CHANNEL_ID')  # Example: -1001234567890
-WEBHOOK_URL = os.getenv('RENDER_WEBHOOK_URL')
+# Bot application (PTB 20+ way)
+application = Application.builder().token(TOKEN).build()
 
-bot = Bot(token=TOKEN)
+# Timezone for Gaza
+GAZA_TZ = pytz.timezone("Asia/Gaza")
 
-# Dispatcher (for webhook handling)
-dispatcher = Dispatcher(bot, None, workers=4)
-
-# Track current question
-questions = [
-    {
-        "question": "What is the past tense of 'go'?",
-        "options": ["goes", "went", "gone", "going"],
-        "correct": 1,
-        "explanation": "The past tense of 'go' is 'went'."
-    },
-    {
-        "question": "Which is a synonym for 'happy'?",
-        "options": ["sad", "angry", "joyful", "tired"],
-        "correct": 2,
-        "explanation": "'Joyful' is a synonym for 'happy'."
-    }
-]
-
+# Game Data
 current_question = None
-answered_users = {}
+correct_answer = None
 first_correct_user = None
+answered_users = set()
 
-# Gaza timezone
-gaza_tz = pytz.timezone('Asia/Gaza')
 
-@app.route('/')
-def home():
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text("Hello! I'm your English Gameshow Bot on Render!")
+
+
+@app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    application.update_queue.put_nowait(update)
+    return jsonify({"status": "ok"})
+
+
+@app.route("/")
+def index():
     return "Bot is running!"
 
-@app.route(f'/{TOKEN}', methods=['POST'])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), bot)
-    dispatcher.process_update(update)
-    return "ok", 200
 
-def start(update, context):
-    update.message.reply_text("Hello! I'm your English Quiz Bot running on Render.")
+async def heartbeat_task(context: ContextTypes.DEFAULT_TYPE):
+    now = datetime.datetime.now(GAZA_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    await context.bot.send_message(chat_id=OWNER_ID, text=f"✅ Bot Heartbeat - Bot is Running.\n⏰ {now}")
 
-def post_question():
-    global current_question, answered_users, first_correct_user
 
-    current_question = random.choice(questions)
-    answered_users = {}
+def set_webhook():
+    webhook_url = f"{WEBHOOK_URL}/{TOKEN}"
+    application.bot.set_webhook(url=webhook_url)
+
+
+async def send_question(context: ContextTypes.DEFAULT_TYPE):
+    global current_question, correct_answer, first_correct_user, answered_users
+
+    current_question = "What is the capital of France?"
+    options = ["Berlin", "Paris", "Madrid", "Rome"]
+    correct_answer = "Paris"
     first_correct_user = None
+    answered_users.clear()
 
-    keyboard = [
-        [InlineKeyboardButton(opt, callback_data=str(idx))] for idx, opt in enumerate(current_question['options'])
-    ]
+    keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in options]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    bot.send_message(
-        chat_id=CHANNEL_ID,
-        text=f"📚 English Question Time!\n\n{current_question['question']}",
-        reply_markup=reply_markup
-    )
+    await context.bot.send_message(chat_id=CHANNEL_ID, text=f"📢 New Question:\n{current_question}", reply_markup=reply_markup)
 
-def handle_answer(update, context):
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     global first_correct_user
 
     query = update.callback_query
     user_id = query.from_user.id
+    user_name = query.from_user.first_name
 
     if user_id in answered_users:
-        query.answer("You've already answered this question!")
+        await query.answer("You've already answered this question!")
         return
 
-    user_choice = int(query.data)
-    answered_users[user_id] = user_choice
+    answered_users.add(user_id)
 
-    if user_choice == current_question['correct']:
+    selected_answer = query.data
+
+    if selected_answer == correct_answer:
         if first_correct_user is None:
-            first_correct_user = query.from_user.first_name
-        query.answer("✅ Correct!")
+            first_correct_user = user_name
+        await query.edit_message_text(
+            text=f"✅ Correct Answer: {correct_answer}\n🏆 First Correct Answer By: {first_correct_user}\n\nExplanation: Paris is the capital of France."
+        )
     else:
-        query.answer("❌ Wrong! No second chances.")
+        await query.answer("❌ Incorrect. You cannot answer again.")
 
-    if len(answered_users) == 1:
-        edit_question_message()
 
-def edit_question_message():
-    correct_option = current_question['options'][current_question['correct']]
-    explanation = current_question['explanation']
+def schedule_jobs(app: Application):
+    app.job_queue.run_daily(send_question, time=datetime.time(hour=8, minute=0, tzinfo=GAZA_TZ))
+    app.job_queue.run_daily(send_question, time=datetime.time(hour=12, minute=0, tzinfo=GAZA_TZ))
+    app.job_queue.run_daily(send_question, time=datetime.time(hour=17, minute=40, tzinfo=GAZA_TZ))
 
-    text = f"📚 English Question Time!\n\n{current_question['question']}\n\n"
-    text += f"✅ Correct Answer: {correct_option}\n\n"
-    text += f"📖 Explanation: {explanation}\n\n"
+    app.job_queue.run_repeating(heartbeat_task, interval=60, first=10)
 
-    if first_correct_user:
-        text += f"🏅 First Correct Answer: {first_correct_user}"
-
-    bot.send_message(chat_id=CHANNEL_ID, text=text)
-
-# 🔔 Heartbeat System
-heartbeat_toggle = True
-
-def send_heartbeat():
-    global heartbeat_toggle
-    try:
-        if heartbeat_toggle:
-            bot.send_message(OWNER_ID, "✅ Bot Heartbeat - Code 1 - Bot is Running.")
-        else:
-            bot.send_message(OWNER_ID, "✅ Bot Heartbeat - Code 2 - Bot is Running.")
-        heartbeat_toggle = not heartbeat_toggle
-    except Exception as e:
-        print(f"Failed to send heartbeat: {e}")
-
-# ✅ New: Time-based Scheduler (independent thread)
-def background_scheduler():
-    question_times = ["08:00", "12:00", "17:31"]  # Gaza times for questions
-    last_posted = None
-
-    while True:
-        now = datetime.now(gaza_tz)
-        current_time_str = now.strftime("%H:%M")
-
-        # Check and post questions
-        if current_time_str in question_times and current_time_str != last_posted:
-            post_question()
-            last_posted = current_time_str
-
-        # Heartbeat every 60 seconds
-        send_heartbeat()
-
-        time.sleep(60)
 
 def main():
-    bot.set_webhook(f'{WEBHOOK_URL}/{TOKEN}')
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_handler))
 
-    # Command handlers for webhook
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(CallbackQueryHandler(handle_answer))
+    schedule_jobs(application)
 
-    bot.send_message(OWNER_ID, "✅ Bot is starting up on Render with new time-based scheduler.")
+    set_webhook()
 
-    # Start the background scheduler thread
-    scheduler_thread = threading.Thread(target=background_scheduler, daemon=True)
-    scheduler_thread.start()
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.getenv("PORT", 10000)),
+        url_path=TOKEN,
+        webhook_url=f"{WEBHOOK_URL}/{TOKEN}",
+    )
 
-    print("Bot started with webhook + background scheduler.")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
