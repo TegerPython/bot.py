@@ -50,6 +50,15 @@ except FileNotFoundError:
     leaderboard = {}
 
 
+def convert_gaza_to_utc(hour, minute):
+    """Convert Gaza time to UTC for scheduling."""
+    gaza_tz = timezone("Asia/Gaza")
+    local_time = time(hour=hour, minute=minute)
+    gaza_datetime = datetime.combine(datetime.now(), local_time)
+    utc_datetime = gaza_tz.localize(gaza_datetime).astimezone(timezone('UTC'))
+    return utc_datetime.time()
+
+
 async def send_daily_question(context: ContextTypes.DEFAULT_TYPE) -> None:
     global current_question, current_message_id, answered_users
 
@@ -130,7 +139,6 @@ def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
     job_queue = application.job_queue
-    job_queue.timezone = timezone("Asia/Gaza")  # ✅ Set timezone globally, not in run_daily
 
     # Handlers
     application.add_handler(CommandHandler("start", show_leaderboard))
@@ -138,10 +146,10 @@ def main():
     application.add_handler(CommandHandler("sendquestion", send_question_manual))  # ✅ Manual trigger
     application.add_handler(CallbackQueryHandler(button))
 
-    # Daily scheduled questions (at 8:00, 12:00, 18:00 Gaza time)
-    job_queue.run_daily(send_daily_question, time(hour=8, minute=0))
-    job_queue.run_daily(send_daily_question, time(hour=12, minute=0))
-    job_queue.run_daily(send_daily_question, time(hour=18, minute=0))
+    # Daily scheduled questions (converted to UTC from Gaza time)
+    job_queue.run_daily(send_daily_question, convert_gaza_to_utc(8, 0))
+    job_queue.run_daily(send_daily_question, convert_gaza_to_utc(12, 0))
+    job_queue.run_daily(send_daily_question, convert_gaza_to_utc(18, 0))
 
     application.run_polling()
 
