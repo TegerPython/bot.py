@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import asyncio
-import random  # ✅ Added here
+import random  # Added for /test command
 from datetime import datetime, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue
@@ -32,7 +32,6 @@ answered_users = set()
 current_question = None
 current_message_id = None
 
-
 def load_leaderboard():
     global leaderboard
     if os.path.exists(LEADERBOARD_FILE):
@@ -42,16 +41,18 @@ def load_leaderboard():
         logger.warning("⚠️ No leaderboard file found, starting fresh.")
         leaderboard = {}
 
-
 def save_leaderboard():
     with open(LEADERBOARD_FILE, "w") as file:
         json.dump(leaderboard, file, indent=2)
 
-
 async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> None:
     global current_question, answered_users, current_message_id
     answered_users = set()
-    current_question = random.choice(questions) if is_test else questions[datetime.now().day % len(questions)]
+
+    if is_test:
+        current_question = random.choice(questions)
+    else:
+        current_question = questions[datetime.now().day % len(questions)]
 
     keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in current_question["options"]]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -62,11 +63,6 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> No
         reply_markup=reply_markup
     )
     current_message_id = message.message_id
-
-
-async def send_daily_question(context: ContextTypes.DEFAULT_TYPE) -> None:
-    await send_question(context, is_test=False)
-
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     global answered_users, current_question, current_message_id
@@ -107,39 +103,32 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     else:
         await query.answer("❌ Incorrect.")
 
-
 async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
     text = "🏆 Leaderboard:\n\n" + "\n".join([f"{name}: {points} points" for name, points in sorted_leaderboard])
     await context.bot.send_message(chat_id=update.effective_chat.id, text=text)
 
-
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
-
 
 async def send_daily_leaderboard(context: ContextTypes.DEFAULT_TYPE) -> None:
     sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
     text = "🏆 Daily Leaderboard:\n\n" + "\n".join([f"{name}: {points} points" for name, points in sorted_leaderboard])
     await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
 
-
-def get_utc_time(hour, minute, tz_name):
-    tz = pytz.timezone(tz_name)
-    local_time = tz.localize(datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0))
-    return local_time.astimezone(pytz.utc).time()
-
-
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send a test question when /testquestion command is issued."""
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
 
     await send_question(context, is_test=True)
-    await update.message.reply_text("✅ Test question sent to the channel.")
+    await update.message.reply_text("✅ Test question sent.")
 
+def get_utc_time(hour, minute, tz_name):
+    tz = pytz.timezone(tz_name)
+    local_time = tz.localize(datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0))
+    return local_time.astimezone(pytz.utc).time()
 
 def main():
     load_leaderboard()
@@ -147,19 +136,25 @@ def main():
     application = Application.builder().token(BOT_TOKEN).build()
     job_queue = application.job_queue
 
-    job_queue.run_daily(send_daily_question, get_utc_time(8, 0, "Asia/Gaza"))
-    job_queue.run_daily(send_daily_question, get_utc_time(12, 0, "Asia/Gaza"))
-    job_queue.run_daily(send_daily_question, get_utc_time(18, 0, "Asia/Gaza"))
+    # Use pytz conversion for Gaza timezone times
+    job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
+    job_queue.run_daily(send_question, get_utc_time(12, 0, "Asia/Gaza"))
+    job_queue.run_daily(send_question, get_utc_time(18, 0, "Asia/Gaza"))
     job_queue.run_daily(send_daily_leaderboard, get_utc_time(23, 59, "Asia/Gaza"))
 
     job_queue.run_repeating(heartbeat, interval=60)
 
     application.add_handler(CommandHandler("leaderboard", show_leaderboard))
-    application.add_handler(CommandHandler("testquestion", test_question))  # ✅ Added safely
+    application.add_handler(CommandHandler("test", test_question))  # Added
     application.add_handler(CallbackQueryHandler(handle_answer))
 
-    application.run_polling()
-
+    # Webhook configuration (REPLACED polling with webhook)
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=8000,
+        url_path=BOT_TOKEN,
+        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+    )
 
 if __name__ == "__main__":
     main()
