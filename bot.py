@@ -1,158 +1,147 @@
+import os
 import json
-import logging
 import random
-from datetime import datetime, time
+import asyncio
+import logging
+from datetime import datetime, timedelta, time
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from pytz import timezone
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-)
 
-# Constants
-BOT_TOKEN = "YOUR_BOT_TOKEN"
-CHANNEL_ID = "@YourChannelUsername"
-LEADERBOARD_FILE = "leaderboard.json"
-
-# Questions
-questions = [
-    {
-        "question": "What is the capital of France?",
-        "options": ["Paris", "London", "Rome", "Berlin"],
-        "correct": "Paris",
-        "explanation": "Paris is the capital and largest city of France."
-    },
-    {
-        "question": "What is 5 + 7?",
-        "options": ["10", "11", "12", "13"],
-        "correct": "12",
-        "explanation": "5 + 7 equals 12."
-    }
-]
-
-# Global variables
-current_question = None
-current_message_id = None
-answered_users = set()
-
-# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load leaderboard
-try:
-    with open(LEADERBOARD_FILE, "r") as f:
-        leaderboard = json.load(f)
-except FileNotFoundError:
-    logger.warning("⚠️ No leaderboard file found, starting fresh.")
-    leaderboard = {}
+# Load BOT_TOKEN from environment
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN is not set in environment variables.")
 
+# Config
+CHANNEL_ID = "@your_channel_username"
+ADMIN_ID = "your_admin_user_id"
+QUESTIONS_FILE = "questions.json"
+LEADERBOARD_FILE = "leaderboard.json"
+heartbeat_code = "1111"
+last_question_message_id = None
+last_question_data = None
 
-def convert_gaza_to_utc(hour, minute):
-    """Convert Gaza time to UTC for scheduling."""
-    gaza_tz = timezone("Asia/Gaza")
-    local_time = time(hour=hour, minute=minute)
-    gaza_datetime = datetime.combine(datetime.now(), local_time)
-    utc_datetime = gaza_tz.localize(gaza_datetime).astimezone(timezone('UTC'))
-    return utc_datetime.time()
+# Heartbeat counter
+heartbeat_counter = 0
 
+def load_questions():
+    with open(QUESTIONS_FILE, "r", encoding="utf-8") as file:
+        return json.load(file)
 
-async def send_daily_question(context: ContextTypes.DEFAULT_TYPE) -> None:
-    global current_question, current_message_id, answered_users
+def load_leaderboard():
+    if os.path.exists(LEADERBOARD_FILE):
+        with open(LEADERBOARD_FILE, "r") as file:
+            return json.load(file)
+    else:
+        logger.warning("⚠️ No leaderboard file found, starting fresh.")
+        return {}
 
-    answered_users = set()
-    current_question = questions[datetime.now().day % len(questions)]
+def save_leaderboard(data):
+    with open(LEADERBOARD_FILE, "w") as file:
+        json.dump(data, file, indent=2)
 
-    keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in current_question["options"]]
+leaderboard = load_leaderboard()
+
+async def send_heartbeat(context: ContextTypes.DEFAULT_TYPE):
+    global heartbeat_counter, heartbeat_code
+    heartbeat_counter += 1
+    heartbeat_code = "1111" if heartbeat_counter % 2 == 0 else "2222"
+    try:
+        await context.bot.send_message(chat_id=ADMIN_ID, text=f"💓 Heartbeat {heartbeat_code}")
+    except Exception as e:
+        logger.error(f"Failed to send heartbeat: {e}")
+
+async def send_daily_question(context: ContextTypes.DEFAULT_TYPE):
+    global last_question_message_id, last_question_data
+
+    questions = load_questions()
+    question_data = random.choice(questions)
+    last_question_data = question_data
+
+    keyboard = [
+        [InlineKeyboardButton(opt, callback_data=f"answer|{idx}") for idx, opt in enumerate(question_data["options"])]
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     message = await context.bot.send_message(
         chat_id=CHANNEL_ID,
-        text=f"📝 Daily Challenge:\n\n{current_question['question']}",
+        text=f"🧠 Daily Question:\n\n{question_data['question']}",
         reply_markup=reply_markup
     )
-    current_message_id = message.message_id
 
+    last_question_message_id = message.message_id
 
-async def send_question_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global current_question, current_message_id, answered_users
-
-    answered_users = set()
-    current_question = questions[datetime.now().day % len(questions)]
-
-    keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in current_question["options"]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    message = await context.bot.send_message(
-        chat_id=CHANNEL_ID,
-        text=f"📝 Manual Challenge:\n\n{current_question['question']}",
-        reply_markup=reply_markup
-    )
-    current_message_id = message.message_id
-
-    await update.message.reply_text("✅ Manual question sent!")
-
-
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global current_message_id
+async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global last_question_message_id, last_question_data
 
     query = update.callback_query
-    user = query.from_user
+    user = update.effective_user
+    user_id = str(user.id)
 
-    if user.id in answered_users:
-        await query.answer("❌ You already answered this question.")
+    if not last_question_data:
+        await query.answer("❌ No active question.")
         return
 
-    answered_users.add(user.id)
+    selected_idx = int(query.data.split("|")[1])
+    correct_idx = last_question_data["correct"]
 
-    if query.data == current_question["correct"]:
+    if selected_idx == correct_idx:
         points = 10
-        leaderboard[str(user.id)] = leaderboard.get(str(user.id), 0) + points
+        text = (f"🎉 Correct! {user.first_name} was the first to answer.\n\n"
+                f"✅ Answer: {last_question_data['options'][correct_idx]}\n\n"
+                f"📚 Explanation: {last_question_data['explanation']}\n\n"
+                f"🏆 {user.first_name} earned {points} points!")
 
-        with open(LEADERBOARD_FILE, "w") as f:
-            json.dump(leaderboard, f)
+        leaderboard[user_id] = leaderboard.get(user_id, 0) + points
+        save_leaderboard(leaderboard)
 
-        winner_text = (
-            f"🏆 {user.first_name} answered correctly!\n"
-            f"➕ {points} points awarded.\n\n"
-            f"✅ Correct Answer: {current_question['correct']}\n"
-            f"ℹ️ {current_question['explanation']}"
-        )
-        await query.edit_message_text(winner_text)
-
+        await query.answer("✅ Correct!")
+        await update.callback_query.edit_message_text(text=text)
+        last_question_message_id = None  # Clear for the next question
     else:
-        await query.answer("❌ Wrong answer!")
+        await query.answer("❌ Wrong answer. Better luck next time!")
 
-
-async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
     text = "🏅 Leaderboard:\n\n"
-    for user_id, score in sorted_leaderboard[:10]:
-        user = await context.bot.get_chat(int(user_id))
-        text += f"{user.first_name}: {score} points\n"
+    for idx, (user_id, points) in enumerate(sorted_leaderboard[:10], 1):
+        user = await context.bot.get_chat(user_id)
+        text += f"{idx}. {user.first_name}: {points} points\n"
     await update.message.reply_text(text)
 
+def convert_gaza_to_utc(gaza_hour, gaza_minute):
+    gaza = timezone("Asia/Gaza")
+    gaza_time = datetime.now(gaza).replace(hour=gaza_hour, minute=gaza_minute, second=0, microsecond=0)
+    utc_time = gaza_time.astimezone(timezone("UTC"))
+    return utc_time.time()
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
+    # Handlers
+    application.add_handler(CommandHandler("leaderboard", show_leaderboard))
+    application.add_handler(CallbackQueryHandler(handle_answer))
+
+    # JobQueue for scheduled tasks (converted times)
     job_queue = application.job_queue
 
-    # Handlers
-    application.add_handler(CommandHandler("start", show_leaderboard))
-    application.add_handler(CommandHandler("leaderboard", show_leaderboard))
-    application.add_handler(CommandHandler("sendquestion", send_question_manual))  # ✅ Manual trigger
-    application.add_handler(CallbackQueryHandler(button))
+    times_gaza = [
+        (8, 0),  # 8:00 AM Gaza
+        (12, 0), # 12:00 PM Gaza
+        (18, 0)  # 6:00 PM Gaza
+    ]
 
-    # Daily scheduled questions (converted to UTC from Gaza time)
-    job_queue.run_daily(send_daily_question, convert_gaza_to_utc(8, 0))
-    job_queue.run_daily(send_daily_question, convert_gaza_to_utc(12, 0))
-    job_queue.run_daily(send_daily_question, convert_gaza_to_utc(18, 0))
+    for hour, minute in times_gaza:
+        utc_time = convert_gaza_to_utc(hour, minute)
+        job_queue.run_daily(send_daily_question, time(hour=utc_time.hour, minute=utc_time.minute))
+
+    job_queue.run_repeating(send_heartbeat, interval=60, first=0)
 
     application.run_polling()
-
 
 if __name__ == "__main__":
     main()
