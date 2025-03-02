@@ -1,13 +1,11 @@
 import os
 import json
 import logging
-import asyncio
 import random
-from datetime import datetime
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from datetime import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, ContextTypes, CallbackQueryHandler
+    Application, CommandHandler, CallbackQueryHandler, ContextTypes
 )
 
 # Load environment variables
@@ -19,16 +17,12 @@ WEBHOOK_URL = os.getenv("RENDER_WEBHOOK_URL")
 # Logging setup
 logging.basicConfig(level=logging.INFO)
 
-# Scheduler
-scheduler = AsyncIOScheduler()
-
-# Leaderboard handling (in-memory for Render)
+# Leaderboard handling
 leaderboard = {}
 
-# Sample questions
 QUESTIONS = [
     {"question": "What's the synonym of 'Happy'?", "options": ["Sad", "Joyful", "Angry", "Tired"], "answer": "Joyful"},
-    {"question": "What’s the past tense of 'go'?", "options": ["Goed", "Went", "Gone", "Goes"], "answer": "Went"}
+    {"question": "What's the past tense of 'go'?", "options": ["Goed", "Went", "Gone", "Goes"], "answer": "Went"}
 ]
 
 current_question = None
@@ -39,7 +33,7 @@ def load_leaderboard():
     try:
         with open("leaderboard.json", "r") as file:
             leaderboard = json.load(file)
-            logging.info("✅ Leaderboard loaded successfully.")
+        logging.info("✅ Leaderboard loaded successfully.")
     except FileNotFoundError:
         logging.warning("⚠️ No leaderboard file found, starting fresh.")
         leaderboard = {}
@@ -109,12 +103,12 @@ async def send_leaderboard_summary(context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=CHANNEL_ID, text=message)
     logging.info("📤 Leaderboard summary sent.")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hello! I'm your competitive English quiz bot 🎉")
-
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=OWNER_ID, text="✅ Bot Heartbeat - Still Running.")
     logging.info("❤️ Heartbeat sent to owner.")
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Hello! I'm your competitive English quiz bot 🎉")
 
 def main():
     logging.info("🚀 Bot Starting...")
@@ -126,14 +120,14 @@ def main():
 
     load_leaderboard()
 
-    scheduler.add_job(send_daily_question, "cron", hour=8, minute=0, timezone="Asia/Gaza", args=[application])
-    scheduler.add_job(send_daily_question, "cron", hour=12, minute=0, timezone="Asia/Gaza", args=[application])
-    scheduler.add_job(send_daily_question, "cron", hour=18, minute=0, timezone="Asia/Gaza", args=[application])
-    scheduler.add_job(send_leaderboard_summary, "cron", hour=23, minute=59, timezone="Asia/Gaza", args=[application])
+    # Job queue (replacement for APScheduler)
+    job_queue = application.job_queue
 
-    scheduler.add_job(heartbeat, "interval", minutes=60, args=[application])
-
-    scheduler.start()
+    job_queue.run_daily(send_daily_question, time(hour=8, minute=0), timezone="Asia/Gaza")
+    job_queue.run_daily(send_daily_question, time(hour=14, minute=10), timezone="Asia/Gaza")
+    job_queue.run_daily(send_daily_question, time(hour=18, minute=0), timezone="Asia/Gaza")
+    job_queue.run_daily(send_leaderboard_summary, time(hour=23, minute=59), timezone="Asia/Gaza")
+    job_queue.run_repeating(heartbeat, interval=3600)
 
     application.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
     logging.info(f"🌐 Webhook set at {WEBHOOK_URL}/webhook")
