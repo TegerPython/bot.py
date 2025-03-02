@@ -12,13 +12,10 @@ from pytz import timezone
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Read from environment variables (as you originally had it)
+# Directly read from environment variables without strict checks (your original way)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 ADMIN_ID = os.getenv("ADMIN_ID")
-
-if not BOT_TOKEN or not CHANNEL_ID or not ADMIN_ID:
-    raise ValueError("❌ BOT_TOKEN, CHANNEL_ID, or ADMIN_ID is missing from environment variables.")
 
 QUESTIONS_FILE = "questions.json"
 LEADERBOARD_FILE = "leaderboard.json"
