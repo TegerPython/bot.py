@@ -3,24 +3,26 @@ import json
 import random
 import asyncio
 import logging
-from datetime import datetime, timedelta, time
+from datetime import datetime, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from pytz import timezone
 
+# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load BOT_TOKEN from environment
+# Read from environment variables (as you originally had it)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN is not set in environment variables.")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+ADMIN_ID = os.getenv("ADMIN_ID")
 
-# Config
-CHANNEL_ID = "@your_channel_username"
-ADMIN_ID = "your_admin_user_id"
+if not BOT_TOKEN or not CHANNEL_ID or not ADMIN_ID:
+    raise ValueError("❌ BOT_TOKEN, CHANNEL_ID, or ADMIN_ID is missing from environment variables.")
+
 QUESTIONS_FILE = "questions.json"
 LEADERBOARD_FILE = "leaderboard.json"
+
 heartbeat_code = "1111"
 last_question_message_id = None
 last_question_data = None
@@ -101,7 +103,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.answer("✅ Correct!")
         await update.callback_query.edit_message_text(text=text)
-        last_question_message_id = None  # Clear for the next question
+        last_question_message_id = None  # Clear for next question
     else:
         await query.answer("❌ Wrong answer. Better luck next time!")
 
@@ -115,30 +117,31 @@ async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def convert_gaza_to_utc(gaza_hour, gaza_minute):
     gaza = timezone("Asia/Gaza")
-    gaza_time = datetime.now(gaza).replace(hour=gaza_hour, minute=gaza_minute, second=0, microsecond=0)
+    now = datetime.now(gaza)
+    gaza_time = now.replace(hour=gaza_hour, minute=gaza_minute, second=0, microsecond=0)
     utc_time = gaza_time.astimezone(timezone("UTC"))
     return utc_time.time()
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Handlers
     application.add_handler(CommandHandler("leaderboard", show_leaderboard))
     application.add_handler(CallbackQueryHandler(handle_answer))
 
-    # JobQueue for scheduled tasks (converted times)
     job_queue = application.job_queue
 
-    times_gaza = [
-        (8, 0),  # 8:00 AM Gaza
-        (12, 0), # 12:00 PM Gaza
-        (18, 0)  # 6:00 PM Gaza
+    # Gaza times - converted to UTC dynamically before scheduling
+    gaza_times = [
+        (8, 0),
+        (12, 0),
+        (18, 0)
     ]
 
-    for hour, minute in times_gaza:
-        utc_time = convert_gaza_to_utc(hour, minute)
+    for gaza_hour, gaza_minute in gaza_times:
+        utc_time = convert_gaza_to_utc(gaza_hour, gaza_minute)
         job_queue.run_daily(send_daily_question, time(hour=utc_time.hour, minute=utc_time.minute))
 
+    # Heartbeat every minute
     job_queue.run_repeating(send_heartbeat, interval=60, first=0)
 
     application.run_polling()
