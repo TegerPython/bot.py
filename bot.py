@@ -128,7 +128,7 @@ def main():
     gaza_timezone = pytz.timezone("Asia/Gaza")
 
     job_queue.run_daily(send_daily_question, time(hour=8, minute=0, tzinfo=gaza_timezone))
-    job_queue.run_daily(send_daily_question, time(hour=14, minute=22, tzinfo=gaza_timezone))
+    job_queue.run_daily(send_daily_question, time(hour=14, minute=25, tzinfo=gaza_timezone))
     job_queue.run_daily(send_daily_question, time(hour=18, minute=0, tzinfo=gaza_timezone))
     job_queue.run_daily(send_leaderboard_summary, time(hour=23, minute=59, tzinfo=gaza_timezone))
     job_queue.run_repeating(heartbeat, interval=3600)
