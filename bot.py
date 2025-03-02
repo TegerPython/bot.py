@@ -1,145 +1,153 @@
 import os
 import json
-import random
-import asyncio
 import logging
+import asyncio
 from datetime import datetime, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from pytz import timezone
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue
+import pytz
 
-# Setup logging
+# Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Directly read from environment variables without strict checks (your original way)
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
-ADMIN_ID = os.getenv("ADMIN_ID")
+# Environment Variables
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
+WEBHOOK_URL = os.getenv("RENDER_WEBHOOK_URL")
 
-QUESTIONS_FILE = "questions.json"
+# Leaderboard file
 LEADERBOARD_FILE = "leaderboard.json"
 
-heartbeat_code = "1111"
-last_question_message_id = None
-last_question_data = None
+# Questions
+questions = [
+    {"question": "What is the capital of France?", "options": ["Berlin", "Madrid", "Paris", "Rome"], "answer": "Paris", "explanation": "Paris is the capital city of France."},
+    {"question": "2 + 2 equals?", "options": ["3", "4", "5", "6"], "answer": "4", "explanation": "Simple math!"}
+]
 
-# Heartbeat counter
-heartbeat_counter = 0
-
-def load_questions():
-    with open(QUESTIONS_FILE, "r", encoding="utf-8") as file:
-        return json.load(file)
+leaderboard = {}
+answered_users = set()
+current_question = None
+current_message_id = None
 
 def load_leaderboard():
+    global leaderboard
     if os.path.exists(LEADERBOARD_FILE):
         with open(LEADERBOARD_FILE, "r") as file:
-            return json.load(file)
+            leaderboard = json.load(file)
     else:
         logger.warning("⚠️ No leaderboard file found, starting fresh.")
-        return {}
+        leaderboard = {}
 
-def save_leaderboard(data):
+def save_leaderboard():
     with open(LEADERBOARD_FILE, "w") as file:
-        json.dump(data, file, indent=2)
+        json.dump(leaderboard, file, indent=2)
 
-leaderboard = load_leaderboard()
+async def send_daily_question(context: ContextTypes.DEFAULT_TYPE) -> None:
+    await send_question(context, is_test=False)
 
-async def send_heartbeat(context: ContextTypes.DEFAULT_TYPE):
-    global heartbeat_counter, heartbeat_code
-    heartbeat_counter += 1
-    heartbeat_code = "1111" if heartbeat_counter % 2 == 0 else "2222"
-    try:
-        await context.bot.send_message(chat_id=ADMIN_ID, text=f"💓 Heartbeat {heartbeat_code}")
-    except Exception as e:
-        logger.error(f"Failed to send heartbeat: {e}")
+async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test: bool = False) -> None:
+    """Core function to send a question, reused for both daily and test questions."""
+    global current_question, answered_users, current_message_id
+    answered_users = set()
+    current_question = questions[datetime.now().day % len(questions)] if not is_test else random.choice(questions)
 
-async def send_daily_question(context: ContextTypes.DEFAULT_TYPE):
-    global last_question_message_id, last_question_data
-
-    questions = load_questions()
-    question_data = random.choice(questions)
-    last_question_data = question_data
-
-    keyboard = [
-        [InlineKeyboardButton(opt, callback_data=f"answer|{idx}") for idx, opt in enumerate(question_data["options"])]
-    ]
+    keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in current_question["options"]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     message = await context.bot.send_message(
         chat_id=CHANNEL_ID,
-        text=f"🧠 Daily Question:\n\n{question_data['question']}",
+        text=f"📝 {'Test' if is_test else 'Daily'} Challenge:\n\n{current_question['question']}",
         reply_markup=reply_markup
     )
+    current_message_id = message.message_id
 
-    last_question_message_id = message.message_id
-
-async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global last_question_message_id, last_question_data
+async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global answered_users, current_question, current_message_id
 
     query = update.callback_query
-    user = update.effective_user
-    user_id = str(user.id)
+    user_id = query.from_user.id
+    username = query.from_user.first_name
 
-    if not last_question_data:
-        await query.answer("❌ No active question.")
+    if user_id in answered_users:
+        await query.answer("❌ You already answered this question.")
         return
 
-    selected_idx = int(query.data.split("|")[1])
-    correct_idx = last_question_data["correct"]
+    answered_users.add(user_id)
+    user_answer = query.data
+    correct = user_answer == current_question["answer"]
 
-    if selected_idx == correct_idx:
-        points = 10
-        text = (f"🎉 Correct! {user.first_name} was the first to answer.\n\n"
-                f"✅ Answer: {last_question_data['options'][correct_idx]}\n\n"
-                f"📚 Explanation: {last_question_data['explanation']}\n\n"
-                f"🏆 {user.first_name} earned {points} points!")
-
-        leaderboard[user_id] = leaderboard.get(user_id, 0) + points
-        save_leaderboard(leaderboard)
-
+    if correct:
         await query.answer("✅ Correct!")
-        await update.callback_query.edit_message_text(text=text)
-        last_question_message_id = None  # Clear for next question
+        leaderboard[username] = leaderboard.get(username, 0) + 1
+        save_leaderboard()
+
+        explanation = current_question.get("explanation", "No explanation provided.")
+        edited_text = (
+            "📝 Daily Challenge (Answered)\n\n"
+            f"Question: {current_question['question']}\n"
+            f"✅ Correct Answer: {current_question['answer']}\n"
+            f"ℹ️ Explanation: {explanation}\n\n"
+            f"🏆 Winner: {username} (+1 point)"
+        )
+        try:
+            await context.bot.edit_message_text(
+                chat_id=CHANNEL_ID,
+                message_id=current_message_id,
+                text=edited_text
+            )
+        except Exception as e:
+            logger.error(f"Failed to edit message: {e}")
     else:
-        await query.answer("❌ Wrong answer. Better luck next time!")
+        await query.answer("❌ Incorrect.")
 
-async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
-    text = "🏅 Leaderboard:\n\n"
-    for idx, (user_id, points) in enumerate(sorted_leaderboard[:10], 1):
-        user = await context.bot.get_chat(user_id)
-        text += f"{idx}. {user.first_name}: {points} points\n"
-    await update.message.reply_text(text)
+    text = "🏆 Leaderboard:\n\n" + "\n".join([f"{name}: {points} points" for name, points in sorted_leaderboard])
+    await context.bot.send_message(chat_id=update.effective_chat.id, text=text)
 
-def convert_gaza_to_utc(gaza_hour, gaza_minute):
-    gaza = timezone("Asia/Gaza")
-    now = datetime.now(gaza)
-    gaza_time = now.replace(hour=gaza_hour, minute=gaza_minute, second=0, microsecond=0)
-    utc_time = gaza_time.astimezone(timezone("UTC"))
-    return utc_time.time()
+async def heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
+
+async def send_daily_leaderboard(context: ContextTypes.DEFAULT_TYPE) -> None:
+    sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
+    text = "🏆 Daily Leaderboard:\n\n" + "\n".join([f"{name}: {points} points" for name, points in sorted_leaderboard])
+    await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
+
+async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Command handler to manually trigger a test question (admin only)."""
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+
+    await send_question(context, is_test=True)
+    await update.message.reply_text("✅ Test question sent!")
+
+def get_utc_time(hour, minute, tz_name):
+    tz = pytz.timezone(tz_name)
+    local_time = tz.localize(datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0))
+    return local_time.astimezone(pytz.utc).time()
 
 def main():
+    load_leaderboard()
+
     application = Application.builder().token(BOT_TOKEN).build()
-
-    application.add_handler(CommandHandler("leaderboard", show_leaderboard))
-    application.add_handler(CallbackQueryHandler(handle_answer))
-
     job_queue = application.job_queue
 
-    # Gaza times - converted to UTC dynamically before scheduling
-    gaza_times = [
-        (8, 0),
-        (12, 0),
-        (18, 0)
-    ]
-
-    for gaza_hour, gaza_minute in gaza_times:
-        utc_time = convert_gaza_to_utc(gaza_hour, gaza_minute)
-        job_queue.run_daily(send_daily_question, time(hour=utc_time.hour, minute=utc_time.minute))
+    # Use pytz conversion for Gaza timezone times
+    job_queue.run_daily(send_daily_question, get_utc_time(8, 0, "Asia/Gaza"))
+    job_queue.run_daily(send_daily_question, get_utc_time(12, 0, "Asia/Gaza"))
+    job_queue.run_daily(send_daily_question, get_utc_time(18, 0, "Asia/Gaza"))
+    job_queue.run_daily(send_daily_leaderboard, get_utc_time(23, 59, "Asia/Gaza"))
 
     # Heartbeat every minute
-    job_queue.run_repeating(send_heartbeat, interval=60, first=0)
+    job_queue.run_repeating(heartbeat, interval=60)
+
+    application.add_handler(CommandHandler("leaderboard", show_leaderboard))
+    application.add_handler(CommandHandler("testquestion", test_question))  # <-- Added command
+    application.add_handler(CallbackQueryHandler(handle_answer))
 
     application.run_polling()
 
