@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import requests
-from datetime import datetime
+from datetime import datetime, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -11,13 +11,14 @@ from telegram.ext import (
     CallbackQueryHandler,
 )
 import random
+import base64
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Bot Token & Webhook URL
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")  # << Fixed here
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 # Fetch repo details from environment variables
@@ -54,12 +55,14 @@ def load_data():
     leaderboard = fetch_file_from_github(LEADERBOARD_URL) or {}
     logger.info(f"Loaded {len(questions)} questions and {len(leaderboard)} leaderboard entries")
 
-async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False):
+async def send_question(context: ContextTypes.DEFAULT_TYPE):
     if not questions:
         logger.warning("No questions available.")
         return
 
+    is_test = context.job.data.get("is_test", False) if context.job.data else False
     current_question = random.choice(questions) if is_test else questions[datetime.now().day % len(questions)]
+
     context.job.chat_data["current_question"] = current_question
     context.job.chat_data["answered_users"] = set()
 
@@ -124,11 +127,11 @@ def save_leaderboard_to_github():
             sha = None
 
         content = json.dumps(leaderboard, indent=2)
-        encoded_content = content.encode("utf-8").decode("latin1")  # Ensure proper encoding
+        encoded_content = base64.b64encode(content.encode("utf-8")).decode("utf-8")
 
         payload = {
             "message": "Update leaderboard",
-            "content": encoded_content.encode("utf-8").decode("latin1").encode("base64").decode(),
+            "content": encoded_content,
             "branch": "main",
         }
 
@@ -146,7 +149,13 @@ def save_leaderboard_to_github():
         logger.error(f"Exception while saving leaderboard: {e}")
 
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    job = context.job_queue.run_once(send_question, 0, chat_id=update.effective_chat.id, name="test_question", data={"is_test": True})
+    job = context.job_queue.run_once(
+        send_question,
+        0,
+        chat_id=update.effective_chat.id,
+        name="test_question",
+        data={"is_test": True}
+    )
     await update.message.reply_text("Test question sent!")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -172,6 +181,12 @@ def main():
     application.add_handler(CommandHandler("test", test_question))
     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
     application.add_handler(CallbackQueryHandler(button))
+
+    # Schedule daily questions (optional if using daily intervals)
+    job_queue = application.job_queue
+    job_queue.run_daily(send_question, time(hour=8), data={})
+    job_queue.run_daily(send_question, time(hour=12), data={})
+    job_queue.run_daily(send_question, time(hour=18), data={})
 
     application.run_webhook(
         listen="0.0.0.0",
