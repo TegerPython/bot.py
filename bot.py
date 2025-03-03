@@ -8,7 +8,7 @@ from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 
 # Load from environment variables
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # New - Your public Render URL like https://my-bot.onrender.com/webhook
 PORT = int(os.getenv("PORT", 8443))  # Default to 8443 for Telegram webhooks, Render can also use 10000
