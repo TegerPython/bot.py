@@ -1,125 +1,150 @@
 import json
-import logging
 import os
-import random
-import requests
-from telegram import (Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll)
-from telegram.ext import (Application, CommandHandler, ContextTypes, MessageHandler, CallbackQueryHandler, PollAnswerHandler, filters)
+import logging
+import httpx
+from telegram import Update, Poll, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import Application, CommandHandler, CallbackContext, CallbackQueryHandler, ContextTypes
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
-# Load environment variables
+# Environment Variables
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-REPO_OWNER = os.getenv("REPO_OWNER")
-REPO_NAME = os.getenv("REPO_NAME")
-QUESTIONS_JSON_URL = "https://raw.githubusercontent.com/TegerPython/bot_data/main/questions.json"
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
-# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Global storage
-questions = []
+current_question = None
+answered_users = set()
 
 async def fetch_questions():
-    global questions
     try:
-        response = requests.get(QUESTIONS_JSON_URL)
-        response.raise_for_status()
-        questions = json.loads(response.text)
-        logger.info(f"Loaded {len(questions)} questions.")
+        async with httpx.AsyncClient() as client:
+            response = await client.get(QUESTIONS_JSON_URL)
+            response.raise_for_status()
+            data = response.json()
+
+            if isinstance(data, list):
+                return data
+            else:
+                logger.error("Invalid JSON format")
+                return []
     except Exception as e:
-        logger.error(f"Failed to fetch questions: {e}")
+        logger.error(f"Error fetching questions: {e}")
+        return []
 
-async def post_question(context: ContextTypes.DEFAULT_TYPE):
+async def save_questions(questions):
+    try:
+        headers = {
+            "Authorization": f"token {os.getenv('GITHUB_TOKEN')}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+        repo_owner = os.getenv("REPO_OWNER")
+        repo_name = os.getenv("REPO_NAME")
+        file_path = "questions.json"
+        file_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
+
+        response = await httpx.AsyncClient().get(file_url, headers=headers)
+        response.raise_for_status()
+        sha = response.json()["sha"]
+
+        encoded_content = json.dumps(questions, indent=4).encode("utf-8")
+        update_response = await httpx.AsyncClient().put(
+            file_url,
+            headers=headers,
+            json={
+                "message": "Update questions.json after using a question",
+                "content": encoded_content.decode("utf-8"),
+                "sha": sha,
+            },
+        )
+        update_response.raise_for_status()
+    except Exception as e:
+        logger.error(f"Error saving questions: {e}")
+
+async def send_question(context: CallbackContext):
+    global current_question, answered_users
+
+    questions = await fetch_questions()
     if not questions:
-        await fetch_questions()
-        if not questions:
-            logger.warning("No questions available after fetch.")
-            return
+        logger.info("No questions left.")
+        return
 
-    question = questions.pop(0)  # Get the next question
-    await update_questions_json()
+    current_question = questions.pop(0)
+    await save_questions(questions)
 
-    if question.get("type") == "poll":
-        await send_poll_question(context, question)
-    elif question.get("type") == "buttons":
-        await send_button_question(context, question)
-    else:
-        logger.warning(f"Unknown question type: {question.get('type')}")
+    answered_users.clear()
 
-async def send_poll_question(context, question):
-    message = await context.bot.send_poll(
-        chat_id=CHANNEL_ID,
-        question=question['question'],
-        options=question['options'],
-        type=Poll.QUIZ,
-        correct_option_id=question['correct_option'],
-        explanation=question.get('explanation', 'No explanation provided.')
-    )
-    context.chat_data['current_poll'] = message.poll.id
-    context.chat_data['correct_option'] = question['correct_option']
+    if current_question["type"] == "poll":
+        await context.bot.send_poll(
+            chat_id=CHANNEL_ID,
+            question=current_question["question"],
+            options=current_question["options"],
+            type=Poll.QUIZ,
+            correct_option_id=current_question["correct_option_id"],
+            explanation=current_question["explanation"],
+        )
+    elif current_question["type"] == "buttons":
+        keyboard = [
+            [InlineKeyboardButton(option, callback_data=option)] for option in current_question["options"]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
 
-async def send_button_question(context, question):
-    buttons = [InlineKeyboardButton(option, callback_data=str(i)) for i, option in enumerate(question['options'])]
-    reply_markup = InlineKeyboardMarkup([buttons])
-    await context.bot.send_message(
-        chat_id=CHANNEL_ID,
-        text=question['question'],
-        reply_markup=reply_markup
-    )
-    context.chat_data['correct_option'] = question['correct_option']
+        await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=current_question["question"],
+            reply_markup=reply_markup,
+        )
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button_callback(update: Update, context: CallbackContext):
+    global current_question, answered_users
+
     query = update.callback_query
-    await query.answer()
+    user_id = query.from_user.id
 
-    correct_option = context.chat_data.get('correct_option')
-    if correct_option is None:
+    if user_id in answered_users:
+        await query.answer("You've already answered this question!")
         return
 
-    if int(query.data) == correct_option:
-        await query.edit_message_text(f"Correct! ✅")
+    answered_users.add(user_id)
+    selected_option = query.data
+    correct_option = current_question["correct_option"]
+
+    if selected_option == correct_option:
+        await query.answer("✅ Correct!")
     else:
-        await query.edit_message_text(f"Wrong answer. ❌")
+        await query.answer("❌ Wrong answer!")
 
-async def update_questions_json():
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/questions.json"
-    headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
-    }
-    new_content = json.dumps(questions, indent=2)
-    response = requests.get(url, headers=headers)
-    if response.status_code != 200:
-        logger.error(f"Failed to fetch existing questions.json from GitHub: {response.status_code}")
-        return
+async def start(update: Update, context: CallbackContext):
+    await update.message.reply_text("Quiz bot is running!")
 
-    sha = response.json().get('sha')
-    update_data = {
-        "message": "Update questions.json",
-        "content": new_content.encode('utf-8').decode('utf-8'),
-        "sha": sha
-    }
-
-    update_response = requests.put(url, headers=headers, json=update_data)
-    if update_response.status_code != 200:
-        logger.error(f"Failed to update questions.json: {update_response.status_code}")
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bot is running.")
+async def test(update: Update, context: CallbackContext):
+    await send_question(context)
 
 def main():
     application = Application.builder().token(TOKEN).build()
 
-    application.add_handler(CommandHandler('start', start))
-    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("test", test))
+    application.add_handler(CallbackQueryHandler(button_callback))
 
-    application.job_queue.run_repeating(post_question, interval=86400, first=0)  # Daily question
+    # Scheduler for automatic question posting
+    scheduler = BackgroundScheduler()
 
-    application.run_polling()
+    scheduler.add_job(send_question, CronTrigger(hour=8, minute=0), args=[application.bot])
+    scheduler.add_job(send_question, CronTrigger(hour=12, minute=0), args=[application.bot])
+    scheduler.add_job(send_question, CronTrigger(hour=18, minute=0), args=[application.bot])
 
-if __name__ == '__main__':
-    import asyncio
-    asyncio.run(fetch_questions())
+    scheduler.start()
+
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=443,
+        url_path="webhook",
+        webhook_url=f"{WEBHOOK_URL}/webhook",
+    )
+
+if __name__ == "__main__":
     main()
