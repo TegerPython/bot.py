@@ -1,144 +1,125 @@
-import os
 import json
 import logging
-import requests
-from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-    CallbackQueryHandler,
-)
+import os
 import random
+import requests
+from telegram import (Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll)
+from telegram.ext import (Application, CommandHandler, ContextTypes, MessageHandler, CallbackQueryHandler, PollAnswerHandler, filters)
 
-# Logging setup
+# Load environment variables
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+REPO_OWNER = os.getenv("REPO_OWNER")
+REPO_NAME = os.getenv("REPO_NAME")
+QUESTIONS_JSON_URL = "https://raw.githubusercontent.com/TegerPython/bot_data/main/questions.json"
+
+# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Bot Token & Webhook URL
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-RENDER_URL = os.getenv("RENDER_URL")  # Set this in Render environment variables
-PORT = int(os.getenv("PORT", 8443))
-
-if not TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN is missing in environment variables!")
-if not RENDER_URL:
-    raise ValueError("RENDER_URL is missing in environment variables!")
-
-WEBHOOK_URL = f"{RENDER_URL}/{TOKEN}"
-
-# Fetch repo details from environment variables
-GITHUB_REPO_OWNER = os.getenv("REPO_OWNER", "your-github-username")
-GITHUB_REPO_NAME = os.getenv("REPO_NAME", "your-bot-data")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-
-# File URLs
-QUESTIONS_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/main/questions.json"
-LEADERBOARD_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/main/leaderboard.json"
-GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/contents/leaderboard.json"
-
-# In-memory data
+# Global storage
 questions = []
-leaderboard = {}
 
-def fetch_file_from_github(file_url):
+async def fetch_questions():
+    global questions
     try:
-        response = requests.get(file_url)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            logger.error(f"Failed to fetch {file_url}: {response.status_code} - {response.text}")
-            return None
+        response = requests.get(QUESTIONS_JSON_URL)
+        response.raise_for_status()
+        questions = json.loads(response.text)
+        logger.info(f"Loaded {len(questions)} questions.")
     except Exception as e:
-        logger.error(f"Exception while fetching {file_url}: {e}")
-        return None
+        logger.error(f"Failed to fetch questions: {e}")
 
-def load_data():
-    global questions, leaderboard
-    questions = fetch_file_from_github(QUESTIONS_URL) or []
-    leaderboard = fetch_file_from_github(LEADERBOARD_URL) or {}
-    logger.info(f"Loaded {len(questions)} questions and {len(leaderboard)} leaderboard entries")
-
-async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False):
+async def post_question(context: ContextTypes.DEFAULT_TYPE):
     if not questions:
-        logger.warning("No questions available.")
-        return
+        await fetch_questions()
+        if not questions:
+            logger.warning("No questions available after fetch.")
+            return
 
-    current_question = random.choice(questions) if is_test else questions[datetime.now().day % len(questions)]
-    context.job.chat_data["current_question"] = current_question
-    context.job.chat_data["answered_users"] = set()
+    question = questions.pop(0)  # Get the next question
+    await update_questions_json()
 
-    keyboard = [[InlineKeyboardButton(option, callback_data=f"answer_{i}")] for i, option in enumerate(current_question["options"])]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    if question.get("type") == "poll":
+        await send_poll_question(context, question)
+    elif question.get("type") == "buttons":
+        await send_button_question(context, question)
+    else:
+        logger.warning(f"Unknown question type: {question.get('type')}")
 
-    await context.bot.send_message(
-        chat_id=context.job.chat_id,
-        text=f"📚 Question:\n\n{current_question['question']}",
-        reply_markup=reply_markup,
+async def send_poll_question(context, question):
+    message = await context.bot.send_poll(
+        chat_id=CHANNEL_ID,
+        question=question['question'],
+        options=question['options'],
+        type=Poll.QUIZ,
+        correct_option_id=question['correct_option'],
+        explanation=question.get('explanation', 'No explanation provided.')
     )
+    context.chat_data['current_poll'] = message.poll.id
+    context.chat_data['correct_option'] = question['correct_option']
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def send_button_question(context, question):
+    buttons = [InlineKeyboardButton(option, callback_data=str(i)) for i, option in enumerate(question['options'])]
+    reply_markup = InlineKeyboardMarkup([buttons])
+    await context.bot.send_message(
+        chat_id=CHANNEL_ID,
+        text=question['question'],
+        reply_markup=reply_markup
+    )
+    context.chat_data['correct_option'] = question['correct_option']
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = query.from_user.id
-    username = query.from_user.username or query.from_user.first_name
     await query.answer()
 
-    if user_id in context.chat_data.get("answered_users", set()):
-        await query.message.reply_text("🚫 You have already answered this question.")
+    correct_option = context.chat_data.get('correct_option')
+    if correct_option is None:
         return
 
-    context.chat_data.setdefault("answered_users", set()).add(user_id)
-    choice = int(query.data.split("_")[1])
-    current_question = context.chat_data.get("current_question")
-
-    if choice == current_question["correct_option"]:
-        await query.edit_message_text(
-            f"✅ Correct! {username} answered it right.\n\n{current_question['question']}\n\n"
-            f"The correct answer: {current_question['options'][choice]}"
-        )
-        update_leaderboard(user_id, username, 1)
+    if int(query.data) == correct_option:
+        await query.edit_message_text(f"Correct! ✅")
     else:
-        await query.edit_message_text(
-            f"❌ Wrong answer, {username}.\n\n{current_question['question']}\n\n"
-            f"The correct answer: {current_question['options'][current_question['correct_option']]}"
-        )
-        update_leaderboard(user_id, username, 0)
+        await query.edit_message_text(f"Wrong answer. ❌")
 
-def update_leaderboard(user_id, username, points):
-    if str(user_id) not in leaderboard:
-        leaderboard[str(user_id)] = {"username": username, "points": 0}
-    leaderboard[str(user_id)]["points"] += points
-    save_leaderboard_to_github()
+async def update_questions_json():
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/questions.json"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    new_content = json.dumps(questions, indent=2)
+    response = requests.get(url, headers=headers)
+    if response.status_code != 200:
+        logger.error(f"Failed to fetch existing questions.json from GitHub: {response.status_code}")
+        return
 
-def save_leaderboard_to_github():
-    try:
-        headers = {"Authorization": f"Bearer {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
-        response = requests.get(GITHUB_API_URL, headers=headers)
-        sha = response.json().get("sha") if response.status_code == 200 else None
+    sha = response.json().get('sha')
+    update_data = {
+        "message": "Update questions.json",
+        "content": new_content.encode('utf-8').decode('utf-8'),
+        "sha": sha
+    }
 
-        content = json.dumps(leaderboard, indent=2)
-        payload = {"message": "Update leaderboard", "content": content.encode("utf-8").decode("latin1").encode("base64").decode(), "branch": "main"}
-        if sha:
-            payload["sha"] = sha
-        response = requests.put(GITHUB_API_URL, headers=headers, json=payload)
-
-        if response.status_code in [200, 201]:
-            logger.info("Leaderboard updated on GitHub")
-        else:
-            logger.error(f"Failed to update leaderboard on GitHub: {response.status_code} - {response.text}")
-    except Exception as e:
-        logger.error(f"Exception while saving leaderboard: {e}")
+    update_response = requests.put(url, headers=headers, json=update_data)
+    if update_response.status_code != 200:
+        logger.error(f"Failed to update questions.json: {update_response.status_code}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Welcome! Use /test to send a test question.")
+    await update.message.reply_text("Bot is running.")
 
 def main():
-    load_data()
     application = Application.builder().token(TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button))
-    application.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=WEBHOOK_URL)
 
-if __name__ == "__main__":
+    application.add_handler(CommandHandler('start', start))
+    application.add_handler(CallbackQueryHandler(button_handler))
+
+    application.job_queue.run_repeating(post_question, interval=86400, first=0)  # Daily question
+
+    application.run_polling()
+
+if __name__ == '__main__':
+    import asyncio
+    asyncio.run(fetch_questions())
     main()
