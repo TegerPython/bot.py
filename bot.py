@@ -14,176 +14,157 @@ from telegram.ext import (
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-# Logging setup
+# Configure logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
+# Global variables
 questions = []
 leaderboard = {}
 scheduler = BackgroundScheduler(timezone=pytz.utc)
+HEARTBEAT_COUNTER = 0
 
-# Fetch data from GitHub
-def fetch_data():
+def fetch_remote_data():
     global questions, leaderboard
     try:
-        # Fetch questions
+        # Load questions
         questions_response = requests.get(os.getenv("QUESTIONS_JSON_URL"))
-        questions_response.raise_for_status()
         questions = questions_response.json()
-        logger.info(f"Loaded {len(questions)} questions")
-
-        # Fetch leaderboard
+        
+        # Load leaderboard
         leaderboard_response = requests.get(os.getenv("LEADERBOARD_JSON_URL"))
-        leaderboard_response.raise_for_status()
         leaderboard = leaderboard_response.json()
-        logger.info(f"Loaded {len(leaderboard)} leaderboard entries")
-
+        
+        logger.info("Data successfully fetched from GitHub")
+        
     except Exception as e:
         logger.error(f"Data fetch error: {str(e)}")
-        questions = []
-        leaderboard = {}
 
-# Update GitHub file
-def update_github_file(filename: str, content: dict):
-    token = os.getenv("GITHUB_TOKEN")
-    repo_owner = os.getenv("REPO_OWNER")
-    repo_name = os.getenv("REPO_NAME")
-    
-    url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{filename}"
-    headers = {"Authorization": f"Bearer {token}"}
-    
+async def send_question_to_channel(context: ContextTypes.DEFAULT_TYPE, question):
+    """Universal question sending function"""
     try:
-        # Get current SHA
-        current_file = requests.get(url, headers=headers).json()
-        sha = current_file.get("sha", "")
-        
-        # Prepare update
-        data = {
-            "message": f"Update {filename}",
-            "content": json.dumps(content, indent=2).encode("utf-8").decode("utf-8"),
-            "sha": sha
-        }
-        
-        response = requests.put(url, headers=headers, json=data)
-        if response.status_code in [200, 201]:
-            logger.info(f"Successfully updated {filename}")
-        else:
-            logger.error(f"Failed to update {filename}: {response.text}")
-            
-    except Exception as e:
-        logger.error(f"GitHub update error: {str(e)}")
-
-# Send a test question to the channel
-async def send_test_question(context: ContextTypes.DEFAULT_TYPE):
-    if not questions:
-        fetch_data()
-    
-    if questions:
-        question = questions[0]  # Use the first question for testing
-        
         message = await context.bot.send_poll(
             chat_id=os.getenv("CHANNEL_ID"),
-            question=question['question'],
-            options=question['options'],
+            question=question["question"],
+            options=question["options"],
             is_anonymous=False,
             allows_multiple_answers=False
         )
         
-        # Store poll data with expiration time (15 minutes)
+        # Store poll data with expiration
         context.chat_data[message.poll.id] = {
-            "correct_option": question['correct_option'],
+            "correct_option": question["correct_option"],
             "answered_users": set(),
             "expires_at": datetime.now() + timedelta(minutes=15)
         }
-
-# Handle poll answers
-async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    answer = update.poll_answer
-    poll_data = context.chat_data.get(answer.poll_id, {})
-    
-    if not poll_data or answer.user.id in poll_data["answered_users"]:
-        return
-    
-    if answer.option_ids[0] == poll_data["correct_option"]:
-        user_id = str(answer.user.id)
-        leaderboard[user_id] = leaderboard.get(user_id, 0) + 1
-        poll_data["answered_users"].add(answer.user.id)
+        return True
         
-        # Announce first correct answer
-        await context.bot.send_message(
-            chat_id=os.getenv("CHANNEL_ID"),
-            text=f"🎉 {answer.user.first_name} got it right first! +1 point!"
-        )
-        
-        update_github_file("leaderboard.json", leaderboard)
+    except Exception as e:
+        logger.error(f"Failed to send question: {str(e)}")
+        return False
 
-# Send heartbeat message to owner
-async def send_heartbeat(context: ContextTypes.DEFAULT_TYPE):
+# -------------- NEW FEATURES IMPLEMENTATION --------------
+async def dual_heartbeat(context: ContextTypes.DEFAULT_TYPE):
+    """Send two simultaneous heartbeat messages"""
+    global HEARTBEAT_COUNTER
+    owner_id = os.getenv("OWNER_TELEGRAM_ID")
+    
+    # First heartbeat
     await context.bot.send_message(
-        chat_id=os.getenv("OWNER_TELEGRAM_ID"),
-        text="❤️ Bot heartbeat - system operational"
+        chat_id=owner_id,
+        text=f"❤️ Heartbeat #{HEARTBEAT_COUNTER} - System Operational"
     )
-
-# Test command to send a question to the channel
-async def test_question_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_test_question(context)
-    await update.message.reply_text("✅ Test question sent to the channel!")
-
-# Setup scheduler
-def setup_scheduler(application):
-    # Daily question schedule
-    question_times = [
-        CronTrigger(hour=8, minute=0, timezone=pytz.utc),
-        CronTrigger(hour=12, minute=0, timezone=pytz.utc),
-        CronTrigger(hour=18, minute=0, timezone=pytz.utc)
-    ]
     
-    for trigger in question_times:
+    # Second heartbeat with stats
+    await context.bot.send_message(
+        chat_id=owner_id,
+        text=f"📊 Status Update:\nQuestions: {len(questions)}\nPlayers: {len(leaderboard)}"
+    )
+    
+    HEARTBEAT_COUNTER += 1
+
+async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Enhanced /test command with question validation"""
+    # Verify owner
+    if str(update.effective_user.id) != os.getenv("OWNER_TELEGRAM_ID"):
+        await update.message.reply_text("⛔️ Unauthorized")
+        return
+
+    try:
+        # Fetch fresh questions for testing
+        test_response = requests.get(os.getenv("QUESTIONS_JSON_URL"))
+        test_questions = test_response.json()
+        
+        if not test_questions:
+            await update.message.reply_text("❌ No questions available")
+            return
+            
+        # Send first question to channel
+        success = await send_question_to_channel(context, test_questions[0])
+        
+        # Send confirmation
+        await update.message.reply_text(
+            "✅ Test question sent to channel!" if success 
+            else "❌ Failed to send test question"
+        )
+        
+    except Exception as e:
+        logger.error(f"Test command error: {str(e)}")
+        await update.message.reply_text("🔥 Critical test failure!")
+
+# -------------- SCHEDULER SETUP --------------
+def setup_scheduled_jobs(application):
+    # Daily questions
+    for time in ["08:00", "12:00", "18:00"]:
+        hour, minute = map(int, time.split(":"))
         scheduler.add_job(
-            send_test_question,
-            trigger=trigger,
-            args=[application]
+            send_question_to_channel,
+            trigger=CronTrigger(hour=hour, minute=minute),
+            args=[application, questions.pop(0)] if questions else [application, {}]
         )
     
-    # Minute heartbeat
+    # Daily leaderboard summary
     scheduler.add_job(
-        send_heartbeat,
+        post_daily_leaderboard,
+        trigger=CronTrigger(hour=0, minute=5)  # 00:05 daily
+    )
+    
+    # Dual heartbeat system
+    scheduler.add_job(
+        dual_heartbeat,
         'interval',
         minutes=1,
         args=[application]
     )
 
-# Main function
+# -------------- MAIN APPLICATION --------------
 def main():
-    # Initial data load
-    fetch_data()
+    # Initial setup
+    fetch_remote_data()
     
-    # Create application
+    # Create bot application
     application = Application.builder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
     
     # Register handlers
     application.add_handlers([
-        CommandHandler("start", lambda u,c: u.message.reply_text("Welcome to Daily English Quiz!")),
-        CommandHandler("testquestion", test_question_command),
+        CommandHandler("test", test_command),
+        CommandHandler("leaderboard", show_leaderboard),
         PollAnswerHandler(handle_poll_answer)
     ])
     
-    # Setup scheduler
-    setup_scheduler(application)
+    # Start scheduler
+    setup_scheduled_jobs(application)
     scheduler.start()
     
     # Webhook configuration
-    port = int(os.getenv("PORT", 8443))
-    webhook_url = os.getenv("WEBHOOK_URL")
-    
     application.run_webhook(
         listen="0.0.0.0",
-        port=port,
-        url_path="/webhook",
-        webhook_url=webhook_url
+        port=int(os.getenv("PORT", 8443)),
+        webhook_url=os.getenv("WEBHOOK_URL"),
+        url_path="/webhook"
     )
 
 if __name__ == "__main__":
