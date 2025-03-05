@@ -3,16 +3,13 @@ import json
 import logging
 import requests
 import pytz
-from datetime import time
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
+from datetime import datetime, timedelta
+from telegram import Update, Poll
 from telegram.ext import (
     Application,
     CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
     PollAnswerHandler,
-    MessageHandler,
-    filters
+    ContextTypes,
 )
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -28,6 +25,7 @@ questions = []
 leaderboard = {}
 scheduler = BackgroundScheduler(timezone=pytz.utc)
 
+# Fetch data from GitHub
 def fetch_data():
     global questions, leaderboard
     try:
@@ -48,6 +46,7 @@ def fetch_data():
         questions = []
         leaderboard = {}
 
+# Update GitHub file
 def update_github_file(filename: str, content: dict):
     token = os.getenv("GITHUB_TOKEN")
     repo_owner = os.getenv("REPO_OWNER")
@@ -77,30 +76,30 @@ def update_github_file(filename: str, content: dict):
     except Exception as e:
         logger.error(f"GitHub update error: {str(e)}")
 
-async def send_scheduled_question(context: ContextTypes.DEFAULT_TYPE):
+# Send a test question to the channel
+async def send_test_question(context: ContextTypes.DEFAULT_TYPE):
     if not questions:
         fetch_data()
     
     if questions:
-        question = questions.pop(0)
+        question = questions[0]  # Use the first question for testing
         
-        if question['type'] == 'poll':
-            message = await context.bot.send_poll(
-                chat_id=os.getenv("CHANNEL_ID"),
-                question=question['question'],
-                options=question['options'],
-                is_anonymous=False,
-                allows_multiple_answers=False
-            )
-            # Store poll data with expiration time (15 minutes)
-            context.chat_data[message.poll.id] = {
-                "correct_option": question['correct_option'],
-                "answered_users": set(),
-                "expires_at": datetime.now() + timedelta(minutes=15)
-            }
+        message = await context.bot.send_poll(
+            chat_id=os.getenv("CHANNEL_ID"),
+            question=question['question'],
+            options=question['options'],
+            is_anonymous=False,
+            allows_multiple_answers=False
+        )
+        
+        # Store poll data with expiration time (15 minutes)
+        context.chat_data[message.poll.id] = {
+            "correct_option": question['correct_option'],
+            "answered_users": set(),
+            "expires_at": datetime.now() + timedelta(minutes=15)
+        }
 
-        update_github_file("questions.json", questions)
-
+# Handle poll answers
 async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     answer = update.poll_answer
     poll_data = context.chat_data.get(answer.poll_id, {})
@@ -121,25 +120,19 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         update_github_file("leaderboard.json", leaderboard)
 
-async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Send heartbeat message to owner
+async def send_heartbeat(context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text="✅ Bot is operational!\n"
-             f"📚 Questions loaded: {len(questions)}\n"
-             f"🏆 Leaderboard entries: {len(leaderboard)}"
-    )
-
-async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sorted_board = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
-    text = "\n".join([f"{i+1}. {uid}: {score}" for i, (uid, score) in enumerate(sorted_board[:10])])
-    await update.message.reply_text(f"🏆 Top 10 Leaderboard:\n{text}")
-
-async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(
-        chat_id=os.getenv("CHANNEL_ID"),
+        chat_id=os.getenv("OWNER_TELEGRAM_ID"),
         text="❤️ Bot heartbeat - system operational"
     )
 
+# Test command to send a question to the channel
+async def test_question_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await send_test_question(context)
+    await update.message.reply_text("✅ Test question sent to the channel!")
+
+# Setup scheduler
 def setup_scheduler(application):
     # Daily question schedule
     question_times = [
@@ -150,19 +143,20 @@ def setup_scheduler(application):
     
     for trigger in question_times:
         scheduler.add_job(
-            send_scheduled_question,
+            send_test_question,
             trigger=trigger,
             args=[application]
         )
     
-    # Hourly heartbeat
+    # Minute heartbeat
     scheduler.add_job(
-        heartbeat,
+        send_heartbeat,
         'interval',
-        hours=1,
+        minutes=1,
         args=[application]
     )
 
+# Main function
 def main():
     # Initial data load
     fetch_data()
@@ -173,8 +167,7 @@ def main():
     # Register handlers
     application.add_handlers([
         CommandHandler("start", lambda u,c: u.message.reply_text("Welcome to Daily English Quiz!")),
-        CommandHandler("test", test_command),
-        CommandHandler("leaderboard", show_leaderboard),
+        CommandHandler("testquestion", test_question_command),
         PollAnswerHandler(handle_poll_answer)
     ])
     
