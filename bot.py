@@ -172,9 +172,20 @@ async def poll_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         update_leaderboard()
 
 def main():
+    # Get the port from the environment variable (provided by Render)
+    port = int(os.getenv("PORT", 8443))  # Default to 8443 if PORT is not set
+
+    # Build the application
     application = Application.builder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
     application.add_handlers([CommandHandler("start", start), PollAnswerHandler(poll_answer_handler)])
-    application.run_webhook(url_path="/webhook", webhook_url=os.getenv("WEBHOOK_URL"))
+
+    # Run the webhook
+    application.run_webhook(
+        listen="0.0.0.0",  # Bind to all available interfaces
+        port=port,         # Use the port provided by Render
+        url_path="/webhook",
+        webhook_url=os.getenv("WEBHOOK_URL")
+    )
 
 if __name__ == "__main__":
     fetch_data()
