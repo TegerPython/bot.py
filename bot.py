@@ -4,7 +4,7 @@ import logging
 import requests
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, PollAnswerHandler
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, PollAnswerHandler, MessageHandler, filters
 from apscheduler.schedulers.background import BackgroundScheduler
 
 # Logging setup
@@ -131,7 +131,14 @@ def delete_used_question_from_github():
     requests.put(url, headers=headers, json=data)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Welcome to the English Quiz Bot!")
+    await update.message.reply_text("Welcome to the English Quiz Bot! Use /test to check functionality.")
+
+async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Send a test message to the user's DM
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="✅ Bot is working! Use /leaderboard to see scores."
+    )
 
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sorted_board = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
@@ -172,17 +179,29 @@ async def poll_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         update_leaderboard()
 
 def main():
-    # Get the port from the environment variable (provided by Render)
-    port = int(os.getenv("PORT", 8443))  # Default to 8443 if PORT is not set
+    port = int(os.getenv("PORT", 8443))
+    
+    # Initialize scheduler
+    scheduler.add_job(send_question, 'interval', minutes=5, args=[None])  # Send questions every 5 minutes
+    scheduler.start()
 
     # Build the application
     application = Application.builder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
-    application.add_handlers([CommandHandler("start", start), PollAnswerHandler(poll_answer_handler)])
+    
+    # Add handlers
+    handlers = [
+        CommandHandler("start", start),
+        CommandHandler("test", test_command),
+        CommandHandler("leaderboard", leaderboard_command),
+        CallbackQueryHandler(button_response_handler),
+        PollAnswerHandler(poll_answer_handler)
+    ]
+    application.add_handlers(handlers)
 
-    # Run the webhook
+    # Run webhook
     application.run_webhook(
-        listen="0.0.0.0",  # Bind to all available interfaces
-        port=port,         # Use the port provided by Render
+        listen="0.0.0.0",
+        port=port,
         url_path="/webhook",
         webhook_url=os.getenv("WEBHOOK_URL")
     )
