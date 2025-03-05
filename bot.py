@@ -4,10 +4,8 @@ import asyncio
 import json
 import datetime
 from telegram import Update, Poll
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler, PollAnswerHandler
+from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler
 import httpx
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -25,7 +23,7 @@ OWNER_TELEGRAM_ID = os.getenv("OWNER_TELEGRAM_ID")
 PORT = int(os.getenv("PORT", 10000))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
-# Global data
+# Global state
 questions = []
 leaderboard = {}
 current_question = None
@@ -114,7 +112,7 @@ async def poll_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = poll_answer.user.id
 
     if user_id in answered_users:
-        return  # Ignore duplicate answers
+        return
 
     answered_users.add(user_id)
 
@@ -159,9 +157,9 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def setup_jobs(application):
     job_queue = application.job_queue
-    job_queue.scheduler.add_job(send_question, CronTrigger(hour=8, minute=0))
-    job_queue.scheduler.add_job(send_question, CronTrigger(hour=12, minute=0))
-    job_queue.scheduler.add_job(send_question, CronTrigger(hour=18, minute=0))
+    job_queue.run_daily(send_question, time=datetime.time(8, 0))
+    job_queue.run_daily(send_question, time=datetime.time(12, 0))
+    job_queue.run_daily(send_question, time=datetime.time(18, 0))
 
 
 async def main():
@@ -179,9 +177,8 @@ async def main():
 
     setup_jobs(application)
 
-    application.job_queue.start()
-
     logger.info("Starting application with webhook mode...")
+
     await application.bot.set_webhook(f"{WEBHOOK_URL}")
 
     await application.run_webhook(
