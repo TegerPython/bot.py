@@ -2,6 +2,6 @@ python-telegram-bot[webhooks]==20.6
 Flask==2.2.2
 pytz
 Werkzeug==2.2.3
-apscheduler
+apscheduler==4.0.0
 requests
 
