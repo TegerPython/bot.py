@@ -28,6 +28,7 @@ scheduler = BackgroundScheduler(timezone=pytz.utc)
 HEARTBEAT_COUNTER = 0
 
 def fetch_remote_data():
+    """Fetch questions and leaderboard from GitHub"""
     global questions, leaderboard
     try:
         # Load questions
@@ -44,6 +45,7 @@ def fetch_remote_data():
         logger.error(f"Data fetch error: {str(e)}")
 
 def update_github_file(filename: str, content: dict):
+    """Update a file in the GitHub repository"""
     token = os.getenv("GITHUB_TOKEN")
     repo_owner = os.getenv("REPO_OWNER")
     repo_name = os.getenv("REPO_NAME")
@@ -64,7 +66,16 @@ def update_github_file(filename: str, content: dict):
     except Exception as e:
         logger.error(f"GitHub update failed: {str(e)}")
 
-async def send_question_to_channel(context: ContextTypes.DEFAULT_TYPE, question):
+async def send_question_to_channel(context: ContextTypes.DEFAULT_TYPE):
+    """Send a question to the channel"""
+    global questions
+    if not questions:
+        fetch_remote_data()
+        if not questions:
+            logger.error("No questions available")
+            return False
+    
+    question = questions.pop(0)
     try:
         message = await context.bot.send_poll(
             chat_id=os.getenv("CHANNEL_ID"),
@@ -79,12 +90,14 @@ async def send_question_to_channel(context: ContextTypes.DEFAULT_TYPE, question)
             "answered_users": set(),
             "expires_at": datetime.now() + timedelta(minutes=15)
         }
+        update_github_file("questions.json", questions)
         return True
     except Exception as e:
         logger.error(f"Failed to send question: {str(e)}")
         return False
 
 async def dual_heartbeat(context: ContextTypes.DEFAULT_TYPE):
+    """Send two simultaneous heartbeat messages"""
     global HEARTBEAT_COUNTER
     owner_id = os.getenv("OWNER_TELEGRAM_ID")
     
@@ -101,20 +114,13 @@ async def dual_heartbeat(context: ContextTypes.DEFAULT_TYPE):
     HEARTBEAT_COUNTER += 1
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /test command"""
     if str(update.effective_user.id) != os.getenv("OWNER_TELEGRAM_ID"):
         await update.message.reply_text("⛔️ Unauthorized")
         return
 
     try:
-        test_response = requests.get(os.getenv("QUESTIONS_JSON_URL"))
-        test_questions = test_response.json()
-        
-        if not test_questions:
-            await update.message.reply_text("❌ No questions available")
-            return
-            
-        success = await send_question_to_channel(context, test_questions[0])
-        
+        success = await send_question_to_channel(context)
         await update.message.reply_text(
             "✅ Test question sent to channel!" if success 
             else "❌ Failed to send test question"
@@ -124,6 +130,7 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔥 Critical test failure!")
 
 async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /leaderboard command"""
     try:
         sorted_entries = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
         response = ["🏆 Leaderboard 🏆"]
@@ -138,6 +145,7 @@ async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Couldn't load leaderboard")
 
 async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle poll answers"""
     answer = update.poll_answer
     poll_data = context.chat_data.get(answer.poll_id, {})
     
@@ -156,6 +164,7 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
 async def post_daily_leaderboard(context: ContextTypes.DEFAULT_TYPE):
+    """Post daily leaderboard summary"""
     sorted_entries = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
     top_5 = "\n".join([f"{idx}. {uid}: {score}" for idx, (uid, score) in enumerate(sorted_entries[:5], 1)])
     
@@ -165,40 +174,49 @@ async def post_daily_leaderboard(context: ContextTypes.DEFAULT_TYPE):
     )
 
 def setup_scheduled_jobs(application):
+    """Configure all scheduled jobs"""
+    # Daily questions
     for time in ["08:00", "12:00", "18:00"]:
         hour, minute = map(int, time.split(":"))
         scheduler.add_job(
             send_question_to_channel,
-            trigger=CronTrigger(hour=hour, minute=minute),
-            args=[application, questions.pop(0)] if questions else [application, {}]
+            trigger=CronTrigger(hour=hour, minute=minute, timezone=pytz.utc),
+            args=[application]
         )
     
+    # Daily leaderboard summary
     scheduler.add_job(
         post_daily_leaderboard,
-        trigger=CronTrigger(hour=0, minute=5)
+        trigger=CronTrigger(hour=0, minute=5, timezone=pytz.utc),
+        args=[application]
     )
     
+    # Dual heartbeat system
     scheduler.add_job(
         dual_heartbeat,
-        'interval',
+        trigger='interval',
         minutes=1,
         args=[application]
     )
 
 def main():
+    """Main application entry point"""
     fetch_remote_data()
     
     application = Application.builder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
     
+    # Register handlers
     application.add_handlers([
         CommandHandler("test", test_command),
         CommandHandler("leaderboard", show_leaderboard),
         PollAnswerHandler(handle_poll_answer)
     ])
     
+    # Setup and start scheduler
     setup_scheduled_jobs(application)
     scheduler.start()
     
+    # Run webhook
     application.run_webhook(
         listen="0.0.0.0",
         port=int(os.getenv("PORT", 8443)),
