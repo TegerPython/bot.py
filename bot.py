@@ -1,205 +1,166 @@
 import os
 import json
+import datetime
 import logging
-import requests
-import pytz
 import asyncio
-from datetime import datetime, timedelta
 from telegram import Update, Poll
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    PollAnswerHandler,
-    ContextTypes,
-)
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
+from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler
+import httpx
 
-# Configure logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+# Logging setup
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Global variables
+# Environment variables
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
+LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+REPO_OWNER = os.getenv("REPO_OWNER")
+REPO_NAME = os.getenv("REPO_NAME")
+
+# In-memory storage
 questions = []
 leaderboard = {}
-scheduler = BackgroundScheduler(timezone=pytz.utc)
-HEARTBEAT_COUNTER = 0
+current_poll_id = None
+answered_users = set()
 
-def fetch_remote_data():
-    """Fetch questions and leaderboard from GitHub"""
-    global questions, leaderboard
-    try:
-        # Load questions
-        questions_response = requests.get(os.getenv("QUESTIONS_JSON_URL"))
-        questions = questions_response.json()
-        
-        # Load leaderboard
-        leaderboard_response = requests.get(os.getenv("LEADERBOARD_JSON_URL"))
-        leaderboard = leaderboard_response.json()
-        
-        logger.info("Data successfully fetched from GitHub")
-        
-    except Exception as e:
-        logger.error(f"Data fetch error: {str(e)}")
+async def fetch_json_from_github(url):
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
+        return response.json()
 
-async def send_question_to_channel(context: ContextTypes.DEFAULT_TYPE):
-    """Send a question to the channel"""
-    global questions
-    if not questions:
-        fetch_remote_data()
-        if not questions:
-            logger.error("No questions available")
-            return False
-    
-    question = questions.pop(0)
-    try:
-        message = await context.bot.send_poll(
-            chat_id=os.getenv("CHANNEL_ID"),
-            question=question["question"],
-            options=question["options"],
-            is_anonymous=True,  # CHANGED TO TRUE FOR CHANNEL COMPATIBILITY
-            allows_multiple_answers=False
-        )
-        
-        context.chat_data[message.poll.id] = {
-            "correct_option": question["correct_option"],
-            "answered_users": set(),
-            "expires_at": datetime.now() + timedelta(minutes=15)
+async def upload_json_to_github(file_path, data, message):
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{file_path}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+
+    # Get current file SHA if it exists
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers)
+        if response.status_code == 200:
+            sha = response.json().get("sha")
+        else:
+            sha = None
+
+        content = json.dumps(data, indent=4).encode('utf-8')
+        encoded_content = content.decode('utf-8')
+
+        payload = {
+            "message": message,
+            "content": encoded_content.encode('utf-8').decode('latin1').encode('utf-8').decode('latin1').encode('base64').decode(),
+            "sha": sha
         }
-        
-        # Update GitHub questions
-        requests.put(os.getenv("QUESTIONS_JSON_URL"), json=questions)
-        return True
-        
-    except Exception as e:
-        logger.error(f"Failed to send question: {str(e)}")
-        return False
+        response = await client.put(url, headers=headers, json=payload)
+        response.raise_for_status()
 
-async def dual_heartbeat():
-    """Send two simultaneous heartbeat messages"""
-    global HEARTBEAT_COUNTER
-    owner_id = os.getenv("OWNER_TELEGRAM_ID")
-    
-    app = Application.builder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
-    await app.initialize()
-    
-    await app.bot.send_message(
-        chat_id=owner_id,
-        text=f"❤️ Heartbeat #{HEARTBEAT_COUNTER} - System Operational"
+async def load_data():
+    global questions, leaderboard
+    questions = await fetch_json_from_github(QUESTIONS_JSON_URL)
+    leaderboard = await fetch_json_from_github(LEADERBOARD_JSON_URL)
+    logger.info(f"Loaded {len(questions)} questions")
+    logger.info(f"Loaded {len(leaderboard)} leaderboard entries")
+
+async def send_question(context: ContextTypes.DEFAULT_TYPE):
+    global current_poll_id, answered_users
+
+    if not questions:
+        logger.warning("No questions left to send!")
+        return
+
+    question_data = questions.pop(0)
+    poll_message = await context.bot.send_poll(
+        chat_id=CHANNEL_ID,
+        question=question_data['question'],
+        options=question_data['options'],
+        type=Poll.QUIZ,
+        correct_option_id=question_data['correct_option_id'],
+        explanation=question_data.get('explanation', '')
     )
-    
-    await app.bot.send_message(
-        chat_id=owner_id,
-        text=f"📊 Status Update:\nQuestions: {len(questions)}\nPlayers: {len(leaderboard)}"
-    )
-    
-    HEARTBEAT_COUNTER += 1
-    await app.shutdown()
+
+    current_poll_id = poll_message.poll.id
+    answered_users = set()
+
+    await upload_json_to_github("questions.json", questions, "Remove used question")
+
+async def poll_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global current_poll_id, answered_users, leaderboard
+
+    poll_answer = update.poll_answer
+    user_id = poll_answer.user.id
+    username = update.effective_user.username or update.effective_user.first_name
+
+    if poll_answer.poll_id != current_poll_id:
+        return
+
+    if user_id in answered_users:
+        logger.info(f"User {username} already answered.")
+        return
+
+    answered_users.add(user_id)
+
+    correct_option_id = None
+    for poll in context.bot_data.get("polls", []):
+        if poll.poll.id == current_poll_id:
+            correct_option_id = poll.poll.correct_option_id
+            break
+
+    if correct_option_id is None:
+        logger.warning("Correct option ID not found for current poll.")
+        return
+
+    if poll_answer.option_ids[0] == correct_option_id:
+        logger.info(f"User {username} answered correctly!")
+
+        if username not in leaderboard:
+            leaderboard[username] = 0
+
+        leaderboard[username] += 1
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=f"🎉 {username} answered correctly first!")
+
+        await upload_json_to_github("leaderboard.json", leaderboard, "Update leaderboard")
+
+async def post_leaderboard(context: ContextTypes.DEFAULT_TYPE):
+    sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
+    leaderboard_text = "🏆 Leaderboard:\n"
+    for rank, (user, score) in enumerate(sorted_leaderboard, start=1):
+        leaderboard_text += f"{rank}. {user}: {score} points\n"
+
+    await context.bot.send_message(chat_id=CHANNEL_ID, text=leaderboard_text)
+
+def setup_jobs(application):
+    job_queue = application.job_queue
+    job_queue.run_daily(send_question, time=datetime.time(8, 0))
+    job_queue.run_daily(send_question, time=datetime.time(12, 0))
+    job_queue.run_daily(send_question, time=datetime.time(18, 0))
+    job_queue.run_daily(post_leaderboard, time=datetime.time(19, 0))
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /test command"""
-    if str(update.effective_user.id) != os.getenv("OWNER_TELEGRAM_ID"):
-        await update.message.reply_text("⛔️ Unauthorized")
-        return
+    await update.message.reply_text("✅ Bot is running!")
 
-    try:
-        success = await send_question_to_channel(context)
-        await update.message.reply_text(
-            "✅ Test question sent to channel!" if success 
-            else "❌ Failed to send test question"
-        )
-    except Exception as e:
-        logger.error(f"Test command error: {str(e)}")
-        await update.message.reply_text("🔥 Critical test failure!")
+async def main():
+    await load_data()
 
-async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /leaderboard command"""
-    try:
-        sorted_entries = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
-        response = ["🏆 Leaderboard 🏆"]
-        
-        for idx, (user_id, data) in enumerate(sorted_entries[:25], 1):
-            response.append(f"{idx}. {data['name']}: {data['score']} points")
-            
-        await update.message.reply_text("\n".join(response))
-    except Exception as e:
-        logger.error(f"Leaderboard error: {str(e)}")
-        await update.message.reply_text("⚠️ Couldn't load leaderboard")
+    application = Application.builder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("test", test_command))
+    application.add_handler(PollAnswerHandler(poll_answer_handler))
 
-async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle poll answers"""
-    answer = update.poll_answer
-    poll_data = context.chat_data.get(answer.poll_id, {})
-    
-    if not poll_data or answer.user.id in poll_data["answered_users"]:
-        return
-    
-    if answer.option_ids[0] == poll_data["correct_option"]:
-        user_id = str(answer.user.id)
-        leaderboard[user_id] = {
-            "score": leaderboard.get(user_id, {"score": 0})["score"] + 1,
-            "name": answer.user.first_name
-        }
-        poll_data["answered_users"].add(answer.user.id)
-        
-        # Update GitHub leaderboard
-        requests.put(os.getenv("LEADERBOARD_JSON_URL"), json=leaderboard)
-        await context.bot.send_message(
-            chat_id=os.getenv("CHANNEL_ID"),
-            text=f"🎉 {answer.user.first_name} got it right! +1 point!"
-        )
+    setup_jobs(application)
 
-def scheduler_wrapper(func):
-    """Wrapper for async scheduler jobs"""
-    def wrapper():
-        asyncio.run(func())
-    return wrapper
+    PORT = int(os.getenv("PORT", "10000"))
+    WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
-def setup_scheduled_jobs():
-    """Configure all scheduled jobs"""
-    # Heartbeat every minute
-    scheduler.add_job(
-        scheduler_wrapper(dual_heartbeat),
-        'interval',
-        minutes=1
-    )
-    
-    # Daily questions
-    for time in ["08:00", "12:00", "18:00"]:
-        hour, minute = map(int, time.split(":"))
-        scheduler.add_job(
-            send_question_to_channel,
-            trigger=CronTrigger(hour=hour, minute=minute, timezone=pytz.utc),
-            args=[Application.builder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build().bot]
-        )
+    await application.bot.set_webhook(WEBHOOK_URL)
+    logger.info(f"Webhook set to: {WEBHOOK_URL}")
 
-def main():
-    """Main application entry point"""
-    fetch_remote_data()
-    
-    application = Application.builder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
-    
-    # Register handlers
-    application.add_handlers([
-        CommandHandler("test", test_command),
-        CommandHandler("leaderboard", show_leaderboard),
-        PollAnswerHandler(handle_poll_answer)
-    ])
-    
-    # Setup and start scheduler
-    setup_scheduled_jobs()
-    scheduler.start()
-    
-    # Run webhook
-    application.run_webhook(
+    await application.run_webhook(
         listen="0.0.0.0",
-        port=int(os.getenv("PORT", 8443)),
-        webhook_url=os.getenv("WEBHOOK_URL"),
-        url_path="/webhook"
+        port=PORT,
+        url_path="webhook"
     )
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
