@@ -1,6 +1,5 @@
 import os
 import json
-import base64
 import datetime
 import logging
 import asyncio
@@ -9,11 +8,8 @@ from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHa
 import httpx
 
 # Logging setup
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)  # Fixed: Use __name__
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Environment variables
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -28,7 +24,6 @@ REPO_NAME = os.getenv("REPO_NAME")
 questions = []
 leaderboard = {}
 current_poll_id = None
-current_correct_option_id = None  # Store correct answer
 answered_users = set()
 
 async def fetch_json_from_github(url):
@@ -42,26 +37,22 @@ async def upload_json_to_github(file_path, data, message):
     url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{file_path}"
     headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
 
+    # Get current file SHA if it exists
     async with httpx.AsyncClient() as client:
-        # Get current file SHA if exists
-        sha = None
-        try:
-            response = await client.get(url, headers=headers)
-            if response.status_code == 200:
-                sha = response.json().get("sha")
-        except httpx.HTTPStatusError:
-            pass
+        response = await client.get(url, headers=headers)
+        if response.status_code == 200:
+            sha = response.json().get("sha")
+        else:
+            sha = None
 
-        # Prepare content
         content = json.dumps(data, indent=4).encode('utf-8')
-        encoded_content = base64.b64encode(content).decode('utf-8')  # Fixed encoding
+        encoded_content = content.decode('utf-8')
 
         payload = {
             "message": message,
-            "content": encoded_content,
+            "content": encoded_content.encode('utf-8').decode('latin1').encode('utf-8').decode('latin1').encode('base64').decode(),
             "sha": sha
         }
-
         response = await client.put(url, headers=headers, json=payload)
         response.raise_for_status()
 
@@ -73,7 +64,7 @@ async def load_data():
     logger.info(f"Loaded {len(leaderboard)} leaderboard entries")
 
 async def send_question(context: ContextTypes.DEFAULT_TYPE):
-    global current_poll_id, current_correct_option_id, answered_users
+    global current_poll_id, answered_users
 
     if not questions:
         logger.warning("No questions left to send!")
@@ -89,15 +80,13 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
         explanation=question_data.get('explanation', '')
     )
 
-    # Store poll information
     current_poll_id = poll_message.poll.id
-    current_correct_option_id = question_data['correct_option_id']  # Store correct answer
     answered_users = set()
 
     await upload_json_to_github("questions.json", questions, "Remove used question")
 
 async def poll_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global current_poll_id, answered_users, leaderboard, current_correct_option_id
+    global current_poll_id, answered_users, leaderboard
 
     poll_answer = update.poll_answer
     user_id = poll_answer.user.id
@@ -112,27 +101,33 @@ async def poll_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     answered_users.add(user_id)
 
-    # Use stored correct answer
-    if poll_answer.option_ids[0] == current_correct_option_id:
+    correct_option_id = None
+    for poll in context.bot_data.get("polls", []):
+        if poll.poll.id == current_poll_id:
+            correct_option_id = poll.poll.correct_option_id
+            break
+
+    if correct_option_id is None:
+        logger.warning("Correct option ID not found for current poll.")
+        return
+
+    if poll_answer.option_ids[0] == correct_option_id:
         logger.info(f"User {username} answered correctly!")
 
-        # Update leaderboard
         if username not in leaderboard:
             leaderboard[username] = 0
-        leaderboard[username] += 1  # Fixed indentation
 
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=f"🎉 {username} answered correctly first!"
-        )
+        leaderboard[username] += 1
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=f"🎉 {username} answered correctly first!")
+
         await upload_json_to_github("leaderboard.json", leaderboard, "Update leaderboard")
 
 async def post_leaderboard(context: ContextTypes.DEFAULT_TYPE):
     sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
     leaderboard_text = "🏆 Leaderboard:\n"
     for rank, (user, score) in enumerate(sorted_leaderboard, start=1):
-        leaderboard_text += f"{rank}. {user}: {score} point{'s' if score != 1 else ''}\n"
-    
+        leaderboard_text += f"{rank}. {user}: {score} points\n"
+
     await context.bot.send_message(chat_id=CHANNEL_ID, text=leaderboard_text)
 
 def setup_jobs(application):
@@ -163,10 +158,9 @@ async def main():
     await application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        webhook_url=WEBHOOK_URL,
-        url_path="",
-        drop_pending_updates=True
+        url_path="webhook"
     )
 
-if __name__ == "__main__":  # Fixed main guard
+if __name__ == "__main__":
+    import asyncio
     asyncio.run(main())
