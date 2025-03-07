@@ -43,8 +43,28 @@ def fetch_remote_data():
     except Exception as e:
         logger.error(f"Data fetch error: {str(e)}")
 
+def update_github_file(filename: str, content: dict):
+    token = os.getenv("GITHUB_TOKEN")
+    repo_owner = os.getenv("REPO_OWNER")
+    repo_name = os.getenv("REPO_NAME")
+    
+    url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{filename}"
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    try:
+        current_file = requests.get(url, headers=headers).json()
+        data = {
+            "message": f"Update {filename}",
+            "content": json.dumps(content, indent=2).encode("utf-8").decode("utf-8"),
+            "sha": current_file.get("sha", "")
+        }
+        response = requests.put(url, headers=headers, json=data)
+        if response.status_code in [200, 201]:
+            logger.info(f"Updated {filename} successfully")
+    except Exception as e:
+        logger.error(f"GitHub update failed: {str(e)}")
+
 async def send_question_to_channel(context: ContextTypes.DEFAULT_TYPE, question):
-    """Universal question sending function"""
     try:
         message = await context.bot.send_poll(
             chat_id=os.getenv("CHANNEL_ID"),
@@ -54,31 +74,25 @@ async def send_question_to_channel(context: ContextTypes.DEFAULT_TYPE, question)
             allows_multiple_answers=False
         )
         
-        # Store poll data with expiration
         context.chat_data[message.poll.id] = {
             "correct_option": question["correct_option"],
             "answered_users": set(),
             "expires_at": datetime.now() + timedelta(minutes=15)
         }
         return True
-        
     except Exception as e:
         logger.error(f"Failed to send question: {str(e)}")
         return False
 
-# -------------- NEW FEATURES IMPLEMENTATION --------------
 async def dual_heartbeat(context: ContextTypes.DEFAULT_TYPE):
-    """Send two simultaneous heartbeat messages"""
     global HEARTBEAT_COUNTER
     owner_id = os.getenv("OWNER_TELEGRAM_ID")
     
-    # First heartbeat
     await context.bot.send_message(
         chat_id=owner_id,
         text=f"❤️ Heartbeat #{HEARTBEAT_COUNTER} - System Operational"
     )
     
-    # Second heartbeat with stats
     await context.bot.send_message(
         chat_id=owner_id,
         text=f"📊 Status Update:\nQuestions: {len(questions)}\nPlayers: {len(leaderboard)}"
@@ -87,14 +101,11 @@ async def dual_heartbeat(context: ContextTypes.DEFAULT_TYPE):
     HEARTBEAT_COUNTER += 1
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Enhanced /test command with question validation"""
-    # Verify owner
     if str(update.effective_user.id) != os.getenv("OWNER_TELEGRAM_ID"):
         await update.message.reply_text("⛔️ Unauthorized")
         return
 
     try:
-        # Fetch fresh questions for testing
         test_response = requests.get(os.getenv("QUESTIONS_JSON_URL"))
         test_questions = test_response.json()
         
@@ -102,22 +113,58 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ No questions available")
             return
             
-        # Send first question to channel
         success = await send_question_to_channel(context, test_questions[0])
         
-        # Send confirmation
         await update.message.reply_text(
             "✅ Test question sent to channel!" if success 
             else "❌ Failed to send test question"
         )
-        
     except Exception as e:
         logger.error(f"Test command error: {str(e)}")
         await update.message.reply_text("🔥 Critical test failure!")
 
-# -------------- SCHEDULER SETUP --------------
+async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        sorted_entries = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
+        response = ["🏆 Leaderboard 🏆"]
+        
+        for idx, (user_id, score) in enumerate(sorted_entries[:25], 1):
+            user = await context.bot.get_chat(user_id)
+            response.append(f"{idx}. {user.first_name}: {score} points")
+            
+        await update.message.reply_text("\n".join(response))
+    except Exception as e:
+        logger.error(f"Leaderboard error: {str(e)}")
+        await update.message.reply_text("⚠️ Couldn't load leaderboard")
+
+async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    answer = update.poll_answer
+    poll_data = context.chat_data.get(answer.poll_id, {})
+    
+    if not poll_data or answer.user.id in poll_data["answered_users"]:
+        return
+    
+    if answer.option_ids[0] == poll_data["correct_option"]:
+        user_id = str(answer.user.id)
+        leaderboard[user_id] = leaderboard.get(user_id, 0) + 1
+        poll_data["answered_users"].add(answer.user.id)
+        
+        update_github_file("leaderboard.json", leaderboard)
+        await context.bot.send_message(
+            chat_id=os.getenv("CHANNEL_ID"),
+            text=f"🎉 {answer.user.first_name} got it right! +1 point!"
+        )
+
+async def post_daily_leaderboard(context: ContextTypes.DEFAULT_TYPE):
+    sorted_entries = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
+    top_5 = "\n".join([f"{idx}. {uid}: {score}" for idx, (uid, score) in enumerate(sorted_entries[:5], 1)])
+    
+    await context.bot.send_message(
+        chat_id=os.getenv("CHANNEL_ID"),
+        text=f"📊 Daily Leaderboard:\n{top_5}"
+    )
+
 def setup_scheduled_jobs(application):
-    # Daily questions
     for time in ["08:00", "12:00", "18:00"]:
         hour, minute = map(int, time.split(":"))
         scheduler.add_job(
@@ -126,13 +173,11 @@ def setup_scheduled_jobs(application):
             args=[application, questions.pop(0)] if questions else [application, {}]
         )
     
-    # Daily leaderboard summary
     scheduler.add_job(
         post_daily_leaderboard,
-        trigger=CronTrigger(hour=0, minute=5)  # 00:05 daily
+        trigger=CronTrigger(hour=0, minute=5)
     )
     
-    # Dual heartbeat system
     scheduler.add_job(
         dual_heartbeat,
         'interval',
@@ -140,26 +185,20 @@ def setup_scheduled_jobs(application):
         args=[application]
     )
 
-# -------------- MAIN APPLICATION --------------
 def main():
-    # Initial setup
     fetch_remote_data()
     
-    # Create bot application
     application = Application.builder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
     
-    # Register handlers
     application.add_handlers([
         CommandHandler("test", test_command),
         CommandHandler("leaderboard", show_leaderboard),
         PollAnswerHandler(handle_poll_answer)
     ])
     
-    # Start scheduler
     setup_scheduled_jobs(application)
     scheduler.start()
     
-    # Webhook configuration
     application.run_webhook(
         listen="0.0.0.0",
         port=int(os.getenv("PORT", 8443)),
