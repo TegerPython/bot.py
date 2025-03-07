@@ -103,4 +103,123 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
         answered_users = set()
 
         # Update GitHub questions
-        if await upload_json_to_github("questions.json", questions,
+        success = await upload_json_to_github("questions.json", questions, "Remove used question")
+        if success:
+            logger.info("Successfully updated questions.json")
+        else:
+            logger.error("Failed to update questions.json")
+
+    except Exception as e:
+        logger.error(f"Error sending question: {e}")
+
+async def poll_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global current_poll_id, answered_users, leaderboard
+
+    poll_answer = update.poll_answer
+    if poll_answer.poll_id != current_poll_id:
+        return
+
+    user_id = poll_answer.user.id
+    username = poll_answer.user.username or poll_answer.user.first_name
+
+    if user_id in answered_users:
+        logger.info(f"User {username} already answered")
+        return
+
+    answered_users.add(user_id)
+
+    try:
+        # Update leaderboard
+        leaderboard[str(user_id)] = {
+            "username": username,
+            "score": leaderboard.get(str(user_id), {}).get("score", 0) + 1
+        }
+
+        # Update GitHub leaderboard
+        success = await upload_json_to_github("leaderboard.json", leaderboard, "Update leaderboard")
+        if success:
+            logger.info(f"Updated leaderboard for {username}")
+            await context.bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=f"🎉 {username} answered correctly! Total points: {leaderboard[str(user_id)]['score']}"
+            )
+        else:
+            logger.error("Failed to update leaderboard")
+
+    except Exception as e:
+        logger.error(f"Error handling poll answer: {e}")
+
+async def post_leaderboard(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        sorted_leaderboard = sorted(
+            leaderboard.items(),
+            key=lambda x: x[1]["score"],
+            reverse=True
+        )
+
+        leaderboard_text = "🏆 Weekly Leaderboard:\n"
+        for rank, (user_id, data) in enumerate(sorted_leaderboard[:10], 1):
+            leaderboard_text += f"{rank}. {data['username']}: {data['score']} points\n"
+
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=leaderboard_text)
+    except Exception as e:
+        logger.error(f"Error posting leaderboard: {e}")
+
+async def send_heartbeat(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await context.bot.send_message(chat_id=OWNER_ID, text="❤️ Bot heartbeat - System operational")
+        await context.bot.send_message(chat_id=OWNER_ID, text=f"📊 Status: {len(questions)} questions left | {len(leaderboard)} players")
+    except Exception as e:
+        logger.error(f"Error sending heartbeat: {e}")
+
+async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("⛔️ Unauthorized")
+        return
+
+    try:
+        await send_question(context)
+        await update.message.reply_text("✅ Test question sent to channel!")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error sending test question: {e}")
+
+def setup_jobs(application):
+    job_queue = application.job_queue
+    
+    # Daily questions
+    job_queue.run_daily(send_question, time=datetime.time(8, 0))
+    job_queue.run_daily(send_question, time=datetime.time(12, 0))
+    job_queue.run_daily(send_question, time=datetime.time(18, 0))
+    
+    # Daily leaderboard
+    job_queue.run_daily(post_leaderboard, time=datetime.time(19, 0))
+    
+    # Heartbeat every minute
+    job_queue.run_repeating(send_heartbeat, interval=60, first=10)
+
+async def main():
+    await load_data()
+
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    application.add_handler(CommandHandler("test", test_command))
+    application.add_handler(PollAnswerHandler(poll_answer_handler))
+    
+    setup_jobs(application)
+
+    PORT = int(os.getenv("PORT", 8443))
+    WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+
+    await application.start()
+    await application.bot.set_webhook(WEBHOOK_URL)
+    
+    logger.info(f"Bot started on port {PORT} with webhook {WEBHOOK_URL}")
+    
+    await application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path="/webhook"
+    )
+
+if __name__ == "__main__":
+    asyncio.run(main())
