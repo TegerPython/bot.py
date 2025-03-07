@@ -3,6 +3,7 @@ import json
 import logging
 import requests
 import pytz
+import asyncio
 from datetime import datetime, timedelta
 from telegram import Update, Poll
 from telegram.ext import (
@@ -44,28 +45,6 @@ def fetch_remote_data():
     except Exception as e:
         logger.error(f"Data fetch error: {str(e)}")
 
-def update_github_file(filename: str, content: dict):
-    """Update a file in the GitHub repository"""
-    token = os.getenv("GITHUB_TOKEN")
-    repo_owner = os.getenv("REPO_OWNER")
-    repo_name = os.getenv("REPO_NAME")
-    
-    url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{filename}"
-    headers = {"Authorization": f"Bearer {token}"}
-    
-    try:
-        current_file = requests.get(url, headers=headers).json()
-        data = {
-            "message": f"Update {filename}",
-            "content": json.dumps(content, indent=2).encode("utf-8").decode("utf-8"),
-            "sha": current_file.get("sha", "")
-        }
-        response = requests.put(url, headers=headers, json=data)
-        if response.status_code in [200, 201]:
-            logger.info(f"Updated {filename} successfully")
-    except Exception as e:
-        logger.error(f"GitHub update failed: {str(e)}")
-
 async def send_question_to_channel(context: ContextTypes.DEFAULT_TYPE):
     """Send a question to the channel"""
     global questions
@@ -81,7 +60,7 @@ async def send_question_to_channel(context: ContextTypes.DEFAULT_TYPE):
             chat_id=os.getenv("CHANNEL_ID"),
             question=question["question"],
             options=question["options"],
-            is_anonymous=False,
+            is_anonymous=True,  # CHANGED TO TRUE FOR CHANNEL COMPATIBILITY
             allows_multiple_answers=False
         )
         
@@ -90,28 +69,35 @@ async def send_question_to_channel(context: ContextTypes.DEFAULT_TYPE):
             "answered_users": set(),
             "expires_at": datetime.now() + timedelta(minutes=15)
         }
-        update_github_file("questions.json", questions)
+        
+        # Update GitHub questions
+        requests.put(os.getenv("QUESTIONS_JSON_URL"), json=questions)
         return True
+        
     except Exception as e:
         logger.error(f"Failed to send question: {str(e)}")
         return False
 
-async def dual_heartbeat(context: ContextTypes.DEFAULT_TYPE):
+async def dual_heartbeat():
     """Send two simultaneous heartbeat messages"""
     global HEARTBEAT_COUNTER
     owner_id = os.getenv("OWNER_TELEGRAM_ID")
     
-    await context.bot.send_message(
+    app = Application.builder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
+    await app.initialize()
+    
+    await app.bot.send_message(
         chat_id=owner_id,
         text=f"❤️ Heartbeat #{HEARTBEAT_COUNTER} - System Operational"
     )
     
-    await context.bot.send_message(
+    await app.bot.send_message(
         chat_id=owner_id,
         text=f"📊 Status Update:\nQuestions: {len(questions)}\nPlayers: {len(leaderboard)}"
     )
     
     HEARTBEAT_COUNTER += 1
+    await app.shutdown()
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /test command"""
@@ -135,9 +121,8 @@ async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sorted_entries = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
         response = ["🏆 Leaderboard 🏆"]
         
-        for idx, (user_id, score) in enumerate(sorted_entries[:25], 1):
-            user = await context.bot.get_chat(user_id)
-            response.append(f"{idx}. {user.first_name}: {score} points")
+        for idx, (user_id, data) in enumerate(sorted_entries[:25], 1):
+            response.append(f"{idx}. {data['name']}: {data['score']} points")
             
         await update.message.reply_text("\n".join(response))
     except Exception as e:
@@ -154,50 +139,42 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     if answer.option_ids[0] == poll_data["correct_option"]:
         user_id = str(answer.user.id)
-        leaderboard[user_id] = leaderboard.get(user_id, 0) + 1
+        leaderboard[user_id] = {
+            "score": leaderboard.get(user_id, {"score": 0})["score"] + 1,
+            "name": answer.user.first_name
+        }
         poll_data["answered_users"].add(answer.user.id)
         
-        update_github_file("leaderboard.json", leaderboard)
+        # Update GitHub leaderboard
+        requests.put(os.getenv("LEADERBOARD_JSON_URL"), json=leaderboard)
         await context.bot.send_message(
             chat_id=os.getenv("CHANNEL_ID"),
             text=f"🎉 {answer.user.first_name} got it right! +1 point!"
         )
 
-async def post_daily_leaderboard(context: ContextTypes.DEFAULT_TYPE):
-    """Post daily leaderboard summary"""
-    sorted_entries = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
-    top_5 = "\n".join([f"{idx}. {uid}: {score}" for idx, (uid, score) in enumerate(sorted_entries[:5], 1)])
-    
-    await context.bot.send_message(
-        chat_id=os.getenv("CHANNEL_ID"),
-        text=f"📊 Daily Leaderboard:\n{top_5}"
-    )
+def scheduler_wrapper(func):
+    """Wrapper for async scheduler jobs"""
+    def wrapper():
+        asyncio.run(func())
+    return wrapper
 
-def setup_scheduled_jobs(application):
+def setup_scheduled_jobs():
     """Configure all scheduled jobs"""
+    # Heartbeat every minute
+    scheduler.add_job(
+        scheduler_wrapper(dual_heartbeat),
+        'interval',
+        minutes=1
+    )
+    
     # Daily questions
     for time in ["08:00", "12:00", "18:00"]:
         hour, minute = map(int, time.split(":"))
         scheduler.add_job(
             send_question_to_channel,
             trigger=CronTrigger(hour=hour, minute=minute, timezone=pytz.utc),
-            args=[application]
+            args=[Application.builder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build().bot]
         )
-    
-    # Daily leaderboard summary
-    scheduler.add_job(
-        post_daily_leaderboard,
-        trigger=CronTrigger(hour=0, minute=5, timezone=pytz.utc),
-        args=[application]
-    )
-    
-    # Dual heartbeat system
-    scheduler.add_job(
-        dual_heartbeat,
-        trigger='interval',
-        minutes=1,
-        args=[application]
-    )
 
 def main():
     """Main application entry point"""
@@ -213,7 +190,7 @@ def main():
     ])
     
     # Setup and start scheduler
-    setup_scheduled_jobs(application)
+    setup_scheduled_jobs()
     scheduler.start()
     
     # Run webhook
