@@ -132,10 +132,10 @@ async def post_leaderboard(context: ContextTypes.DEFAULT_TYPE):
 
 def setup_jobs(application):
     job_queue = application.job_queue
-    job_queue.run_daily(send_question, time=datetime.time(8, 0))
-    job_queue.run_daily(send_question, time=datetime.time(12, 0))
-    job_queue.run_daily(send_question, time=datetime.time(18, 0))
-    job_queue.run_daily(post_leaderboard, time=datetime.time(19, 0))
+    job_queue.run_daily(send_question, time=datetime.time(8, 0), days=(0, 1, 2, 3, 4, 5, 6))
+    job_queue.run_daily(send_question, time=datetime.time(12, 0), days=(0, 1, 2, 3, 4, 5, 6))
+    job_queue.run_daily(send_question, time=datetime.time(18, 0), days=(0, 1, 2, 3, 4, 5, 6))
+    job_queue.run_daily(post_leaderboard, time=datetime.time(19, 0), days=(0, 1, 2, 3, 4, 5, 6))
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot is running!")
