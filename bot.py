@@ -1,143 +1,166 @@
-import json
-import logging
 import os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-import requests
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from flask import Flask, request
+import json
+import datetime
+import logging
+import asyncio
+from telegram import Update, Poll
+from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler
+import httpx
 
-# Setup Logging
+# Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load Environment Variables
+# Environment variables
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
 LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
-OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "123456"))
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+REPO_OWNER = os.getenv("REPO_OWNER")
+REPO_NAME = os.getenv("REPO_NAME")
 
-# Flask App for Render Webhook
-app = Flask(__name__)
-
-# Global Application (PTB) and Scheduler
-application = Application.builder().token(BOT_TOKEN).build()
-scheduler = AsyncIOScheduler()
-
-# In-memory data (questions & leaderboard)
+# In-memory storage
 questions = []
 leaderboard = {}
+current_poll_id = None
+answered_users = set()
 
-# Load Questions & Leaderboard
-def load_data():
+async def fetch_json_from_github(url):
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
+        return response.json()
+
+async def upload_json_to_github(file_path, data, message):
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{file_path}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+
+    # Get current file SHA if it exists
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers)
+        if response.status_code == 200:
+            sha = response.json().get("sha")
+        else:
+            sha = None
+
+        content = json.dumps(data, indent=4).encode('utf-8')
+        encoded_content = content.decode('utf-8')
+
+        payload = {
+            "message": message,
+            "content": encoded_content.encode('utf-8').decode('latin1').encode('utf-8').decode('latin1').encode('base64').decode(),
+            "sha": sha
+        }
+        response = await client.put(url, headers=headers, json=payload)
+        response.raise_for_status()
+
+async def load_data():
     global questions, leaderboard
-    questions = requests.get(QUESTIONS_JSON_URL).json()
-    leaderboard = requests.get(LEADERBOARD_JSON_URL).json()
+    questions = await fetch_json_from_github(QUESTIONS_JSON_URL)
+    leaderboard = await fetch_json_from_github(LEADERBOARD_JSON_URL)
+    logger.info(f"Loaded {len(questions)} questions")
+    logger.info(f"Loaded {len(leaderboard)} leaderboard entries")
 
-# Save Leaderboard (push to GitHub or external storage)
-def save_leaderboard():
-    url = LEADERBOARD_JSON_URL.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
-    headers = {
-        "Authorization": f"Bearer {os.getenv('GITHUB_TOKEN')}",
-        "Content-Type": "application/json"
-    }
-    data = json.dumps(leaderboard, indent=2)
-    response = requests.put(url, headers=headers, data=data)
-    logger.info(f"Leaderboard saved: {response.status_code}")
+async def send_question(context: ContextTypes.DEFAULT_TYPE):
+    global current_poll_id, answered_users
 
-# Post Question with Inline Buttons
-async def post_question(context: ContextTypes.DEFAULT_TYPE):
     if not questions:
-        logger.warning("No questions left!")
+        logger.warning("No questions left to send!")
         return
 
-    question = questions.pop(0)
-    keyboard = [
-        [InlineKeyboardButton(option, callback_data=option)]
-        for option in question["options"]
-    ]
-    message = await context.bot.send_message(
+    question_data = questions.pop(0)
+    poll_message = await context.bot.send_poll(
         chat_id=CHANNEL_ID,
-        text=question["question"],
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        question=question_data['question'],
+        options=question_data['options'],
+        type=Poll.QUIZ,
+        correct_option_id=question_data['correct_option_id'],
+        explanation=question_data.get('explanation', '')
     )
-    context.chat_data["current_question"] = question
-    context.chat_data["question_message_id"] = message.message_id
 
-# Handle Button Click (Answer Submission)
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    await query.answer()
+    current_poll_id = poll_message.poll.id
+    answered_users = set()
 
-    question = context.chat_data.get("current_question")
-    if not question:
-        await query.message.edit_text("No active question.")
+    await upload_json_to_github("questions.json", questions, "Remove used question")
+
+async def poll_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global current_poll_id, answered_users, leaderboard
+
+    poll_answer = update.poll_answer
+    user_id = poll_answer.user.id
+    username = update.effective_user.username or update.effective_user.first_name
+
+    if poll_answer.poll_id != current_poll_id:
         return
 
-    user = update.effective_user
-    correct_answer = question["answer"]
-
-    # Check if user already answered
-    if user.id in context.chat_data.get("answered_users", set()):
-        await query.message.reply_text(f"{user.first_name}, you already answered!")
+    if user_id in answered_users:
+        logger.info(f"User {username} already answered.")
         return
 
-    context.chat_data.setdefault("answered_users", set()).add(user.id)
+    answered_users.add(user_id)
 
-    if query.data == correct_answer:
-        leaderboard[user.id] = leaderboard.get(user.id, 0) + 1
-        await query.message.reply_text(f"✅ Correct, {user.first_name}!")
-    else:
-        await query.message.reply_text(f"❌ Incorrect, {user.first_name}. The correct answer was {correct_answer}.")
+    correct_option_id = None
+    for poll in context.bot_data.get("polls", []):
+        if poll.poll.id == current_poll_id:
+            correct_option_id = poll.poll.correct_option_id
+            break
 
-    # Save after each question
-    save_leaderboard()
+    if correct_option_id is None:
+        logger.warning("Correct option ID not found for current poll.")
+        return
 
-# Show Leaderboard
-async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if poll_answer.option_ids[0] == correct_option_id:
+        logger.info(f"User {username} answered correctly!")
+
+        if username not in leaderboard:
+            leaderboard[username] = 0
+
+        leaderboard[username] += 1
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=f"🎉 {username} answered correctly first!")
+
+        await upload_json_to_github("leaderboard.json", leaderboard, "Update leaderboard")
+
+async def post_leaderboard(context: ContextTypes.DEFAULT_TYPE):
     sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
-    text = "🏆 Leaderboard 🏆\n\n"
-    for user_id, score in sorted_leaderboard:
-        text += f"{user_id}: {score}\n"
-    await update.message.reply_text(text)
+    leaderboard_text = "🏆 Leaderboard:\n"
+    for rank, (user, score) in enumerate(sorted_leaderboard, start=1):
+        leaderboard_text += f"{rank}. {user}: {score} points\n"
 
-# Start Command
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("Welcome to the Quiz Bot!")
+    await context.bot.send_message(chat_id=CHANNEL_ID, text=leaderboard_text)
 
-# Flask Webhook Handler
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), application.bot)
-    application.update_queue.put_nowait(update)
-    return "OK"
+def setup_jobs(application):
+    job_queue = application.job_queue
+    job_queue.run_daily(send_question, time=datetime.time(8, 0))
+    job_queue.run_daily(send_question, time=datetime.time(12, 0))
+    job_queue.run_daily(send_question, time=datetime.time(18, 0))
+    job_queue.run_daily(post_leaderboard, time=datetime.time(19, 0))
 
-# Set Webhook (manual setup step)
-async def set_webhook():
-    await application.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
-    logger.info(f"Webhook set to: {WEBHOOK_URL}/webhook")
+async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("✅ Bot is running!")
 
-# Initialize Bot and Start Scheduler
-async def start_bot():
-    load_data()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
-    application.add_handler(CallbackQueryHandler(button))
+async def main():
+    await load_data()
 
-    scheduler.add_job(post_question, "cron", hour=8, minute=0)
-    scheduler.add_job(post_question, "cron", hour=12, minute=0)
-    scheduler.add_job(post_question, "cron", hour=18, minute=0)
+    application = Application.builder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("test", test_command))
+    application.add_handler(PollAnswerHandler(poll_answer_handler))
 
-    scheduler.start()
-    await set_webhook()
+    setup_jobs(application)
+
+    PORT = int(os.getenv("PORT", "10000"))
+    WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+
+    await application.bot.set_webhook(WEBHOOK_URL)
+    logger.info(f"Webhook set to: {WEBHOOK_URL}")
+
+    await application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path="webhook"
+    )
 
 if __name__ == "__main__":
     import asyncio
-
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(start_bot())
-
-    # Start Flask app (Render will hit `/webhook`)
-    app.run(host="0.0.0.0", port=10000)
+    asyncio.run(main())
