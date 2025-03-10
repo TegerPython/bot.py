@@ -115,8 +115,8 @@ def setup_jobs(app):
     """Schedule jobs for the bot."""
     times = [(8, 0), (12, 0), (18, 0), (19, 0)]
     for time in times[:3]:
-        app.job_queue.run_daily(send_question, datetime.time(*time))
-    app.job_queue.run_daily(post_leaderboard, datetime.time(*times[3]))
+        app.job_queue.run_daily(send_question, datetime.time(*time), days=(0, 1, 2, 3, 4, 5, 6))
+    app.job_queue.run_daily(post_leaderboard, datetime.time(*times[3]), days=(0, 1, 2, 3, 4, 5, 6))
 
 async def test(update: Update, _):
     """Command to check bot status."""
@@ -132,9 +132,23 @@ async def main():
     setup_jobs(app)
 
     logger.info("Bot is running...")
-    await app.run_polling()
+    
+    # Handle event loop issue for Render
+    try:
+        await app.run_polling()
+    except RuntimeError as e:
+        if "This event loop is already running" in str(e):
+            logger.warning("Event loop already running, running in existing loop.")
+            loop = asyncio.get_running_loop()
+            loop.create_task(app.run_polling())
+        else:
+            raise
 
-# Run bot safely in an existing event loop (for Render)
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
     loop.run_until_complete(main())
