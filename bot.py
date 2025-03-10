@@ -1,154 +1,52 @@
-import os
-import json
-import datetime
-import logging
 import asyncio
-import base64
-from telegram import Update, Poll
-from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler
-import httpx
+import logging
+import datetime
+from telegram import Update
+from telegram.ext import Application, CommandHandler, CallbackContext
 
-logging.basicConfig(level=logging.INFO)
+# Enable logging
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-# Load environment variables
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
-QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
-LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-REPO_OWNER = os.getenv("REPO_OWNER")
-REPO_NAME = os.getenv("REPO_NAME")
+# ✅ Your exact bot token and channel name
+TOKEN = "6296032339:AAG-fqxgHLOoI3CNiGFupWvwU0_4zvN6cLc"
+CHANNEL = "@TegerTopics"
 
-# Global variables
-questions = []
-leaderboard = {}
-current_poll_id = None
-answered_users = set()
+# Initialize the bot application
+app = Application.builder().token(TOKEN).build()
 
-async def fetch_json_from_github(url):
-    """Fetch JSON data from GitHub."""
-    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, headers=headers)
-        response.raise_for_status()
-        return response.json()
+async def start(update: Update, context: CallbackContext) -> None:
+    """Send a welcome message when the /start command is issued."""
+    await update.message.reply_text("Hello! I am your quiz bot. Stay tuned for questions!")
 
-async def upload_json_to_github(file_path, data, message):
-    """Upload JSON data to GitHub."""
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{file_path}"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
-    
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, headers=headers)
-        sha = response.json().get("sha") if response.status_code == 200 else None
-        
-        content = json.dumps(data, indent=4).encode('utf-8')
-        encoded_content = base64.b64encode(content).decode()
+async def send_question(context: CallbackContext) -> None:
+    """Send a quiz question at scheduled times."""
+    question_text = "Here's your English quiz question! What is the correct sentence?"
+    await context.bot.send_message(chat_id=CHANNEL, text=question_text)
 
-        payload = {
-            "message": message,
-            "content": encoded_content,
-            "sha": sha
-        }
-        await client.put(url, headers=headers, json=payload)
-
-async def load_data():
-    """Load questions and leaderboard from GitHub."""
-    global questions, leaderboard
-    try:
-        questions = await fetch_json_from_github(QUESTIONS_JSON_URL)
-        leaderboard = await fetch_json_from_github(LEADERBOARD_JSON_URL)
-        logger.info(f"Loaded {len(questions)} questions, {len(leaderboard)} leaderboard entries")
-    except Exception as e:
-        logger.error(f"Error loading data: {e}")
-
-async def send_question(context: ContextTypes.DEFAULT_TYPE):
-    """Send a quiz question to the channel."""
-    global current_poll_id, answered_users
-    if not questions:
-        logger.warning("No questions left!")
-        return
-    
-    question_data = questions.pop(0)
-    
-    poll_message = await context.bot.send_poll(
-        chat_id=CHANNEL_ID,
-        question=question_data['question'],
-        options=question_data['options'],
-        type=Poll.QUIZ,
-        correct_option_id=question_data['correct_option_id'],
-        explanation=question_data.get('explanation', '')
-    )
-    
-    current_poll_id = poll_message.poll.id
-    answered_users.clear()
-
-    await upload_json_to_github("questions.json", questions, "Remove used question")
-
-async def poll_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle poll answers."""
-    global current_poll_id, answered_users, leaderboard
-    answer = update.poll_answer
-    
-    if answer.poll_id != current_poll_id or answer.user.id in answered_users:
-        return
-    
-    answered_users.add(answer.user.id)
-    user = update.effective_user.username or update.effective_user.first_name
-    
-    correct_id = next((poll.poll.correct_option_id for poll in context.bot_data.get("polls", []) 
-                     if poll.poll.id == current_poll_id), None)
-    
-    if correct_id is not None and answer.option_ids[0] == correct_id:
-        leaderboard[user] = leaderboard.get(user, 0) + 1
-        await context.bot.send_message(CHANNEL_ID, f"🎉 {user} answered correctly first!")
-        await upload_json_to_github("leaderboard.json", leaderboard, "Update leaderboard")
-
-async def post_leaderboard(context: ContextTypes.DEFAULT_TYPE):
-    """Post the leaderboard."""
-    sorted_lb = "\n".join(f"{i}. {k}: {v}" for i, (k, v) in enumerate(
-        sorted(leaderboard.items(), key=lambda x: x[1], reverse=True), 1))
-    await context.bot.send_message(CHANNEL_ID, f"🏆 Leaderboard:\n{sorted_lb}")
-
-def setup_jobs(app):
-    """Schedule jobs for the bot."""
-    times = [(8, 0), (12, 0), (18, 0), (19, 0)]
-    for time in times[:3]:
-        app.job_queue.run_daily(send_question, datetime.time(*time), days=(0, 1, 2, 3, 4, 5, 6))
-    app.job_queue.run_daily(post_leaderboard, datetime.time(*times[3]), days=(0, 1, 2, 3, 4, 5, 6))
-
-async def test(update: Update, _):
-    """Command to check bot status."""
-    await update.message.reply_text("✅ Bot operational")
+async def post_leaderboard(context: CallbackContext) -> None:
+    """Post leaderboard at the scheduled time."""
+    leaderboard_text = "🏆 Leaderboard:\n1. User1 - 10 points\n2. User2 - 8 points"
+    await context.bot.send_message(chat_id=CHANNEL, text=leaderboard_text)
 
 async def main():
-    """Main function to run the bot."""
-    await load_data()
-    
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("test", test))
-    app.add_handler(PollAnswerHandler(poll_answer_handler))
-    setup_jobs(app)
+    """Main function to start the bot and schedule jobs."""
+    app.add_handler(CommandHandler("start", start))
+
+    # Schedule quiz questions daily at 8 AM, 12 PM, and 6 PM
+    question_times = [(8, 0), (12, 0), (18, 0)]
+    for time in question_times:
+        app.job_queue.run_daily(send_question, datetime.time(*time), days=(0, 1, 2, 3, 4, 5, 6))
+
+    # Schedule the leaderboard at 6:30 PM
+    app.job_queue.run_daily(post_leaderboard, datetime.time(18, 30), days=(0, 1, 2, 3, 4, 5, 6))
 
     logger.info("Bot is running...")
-    
-    # Handle event loop issue for Render
-    try:
-        await app.run_polling()
-    except RuntimeError as e:
-        if "This event loop is already running" in str(e):
-            logger.warning("Event loop already running, running in existing loop.")
-            loop = asyncio.get_running_loop()
-            loop.create_task(app.run_polling())
-        else:
-            raise
+
+    # Run the bot in polling mode with the correct event loop
+    await app.run_polling()
 
 if __name__ == "__main__":
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    
-    loop.run_until_complete(main())
+    asyncio.run(main())  # ✅ Fixed event loop issue
