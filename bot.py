@@ -139,10 +139,35 @@ def webhook():
     return "OK", 200
 
 # Scheduler jobs
-scheduler.add_job(post_question, "cron", hour=8, minute=0)
-scheduler.add_job(post_question, "cron", hour=12, minute=0)
-scheduler.add_job(post_question, "cron", hour=18, minute=0)
-scheduler.add_job(post_leaderboard, "cron", hour=20, minute=0)
+def schedule_jobs():
+    scheduler.add_job(
+        post_question,
+        "cron",
+        hour=8,
+        minute=0,
+        args=[bot_app],
+    )
+    scheduler.add_job(
+        post_question,
+        "cron",
+        hour=12,
+        minute=0,
+        args=[bot_app],
+    )
+    scheduler.add_job(
+        post_question,
+        "cron",
+        hour=18,
+        minute=0,
+        args=[bot_app],
+    )
+    scheduler.add_job(
+        post_leaderboard,
+        "cron",
+        hour=20,
+        minute=0,
+        args=[bot_app],
+    )
 
 async def run():
     """Run the bot with webhook."""
@@ -150,6 +175,7 @@ async def run():
     flask_app.run(host="0.0.0.0", port=5000)
 
 if __name__ == "__main__":
+    schedule_jobs()
     scheduler.start()
 
     try:
