@@ -19,6 +19,7 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
 LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "123456"))
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 
 # Flask App for Render Webhook
 app = Flask(__name__)
@@ -34,19 +35,25 @@ leaderboard = {}
 # Load Questions & Leaderboard
 def load_data():
     global questions, leaderboard
-    questions = requests.get(QUESTIONS_JSON_URL).json()
-    leaderboard = requests.get(LEADERBOARD_JSON_URL).json()
+    try:
+        questions = requests.get(QUESTIONS_JSON_URL).json()
+        leaderboard = requests.get(LEADERBOARD_JSON_URL).json()
+    except Exception as e:
+        logger.error(f"Error loading data: {e}")
 
 # Save Leaderboard
 def save_leaderboard():
-    url = LEADERBOARD_JSON_URL.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
-    headers = {
-        "Authorization": f"Bearer {os.getenv('GITHUB_TOKEN')}",
-        "Content-Type": "application/json"
-    }
-    data = json.dumps(leaderboard, indent=2)
-    response = requests.put(url, headers=headers, data=data)
-    logger.info(f"Leaderboard saved: {response.status_code}")
+    try:
+        url = LEADERBOARD_JSON_URL.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
+        headers = {
+            "Authorization": f"Bearer {GITHUB_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        data = json.dumps(leaderboard, indent=2)
+        response = requests.put(url, headers=headers, data=data)
+        logger.info(f"Leaderboard saved: {response.status_code}")
+    except Exception as e:
+        logger.error(f"Error saving leaderboard: {e}")
 
 # Post Question
 async def post_question(context: ContextTypes.DEFAULT_TYPE):
@@ -66,6 +73,7 @@ async def post_question(context: ContextTypes.DEFAULT_TYPE):
     )
     context.chat_data["current_question"] = question
     context.chat_data["question_message_id"] = message.message_id
+    context.chat_data["answered_users"] = set()
 
 # Handle Answer
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -100,7 +108,13 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
     text = "🏆 Leaderboard 🏆\n\n"
     for user_id, score in sorted_leaderboard:
-        text += f"{user_id}: {score}\n"
+        try:
+            user = await context.bot.get_chat(user_id)
+            user_name = user.first_name
+        except Exception:
+            user_name = "Unknown User"
+
+        text += f"{user_name}: {score}\n"
     await update.message.reply_text(text)
 
 # Start Command
@@ -145,3 +159,4 @@ if __name__ == "__main__":
 
     # Start Flask app (Render Hosting)
     app.run(host="0.0.0.0", port=8443)
+    
