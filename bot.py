@@ -26,7 +26,7 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
 LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
-PORT = int(os.getenv("PORT", 5000))  # ✅ Get Render's PORT
+PORT = int(os.getenv("PORT", 5000))  # ✅ Use Render's PORT
 
 # Flask app for webhook
 flask_app = Flask(__name__)
