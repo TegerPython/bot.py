@@ -5,7 +5,7 @@ import datetime
 import asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext
 
 # Enable logging
 logging.basicConfig(
@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-PORT = int(os.getenv("PORT", 8443))  # Default to port 8443
 
 # Load questions
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
@@ -56,7 +55,7 @@ async def fetch_leaderboard():
         logger.error(f"Error fetching leaderboard: {e}")
 
 # Post a question to the channel
-async def post_question(application: Application):
+def post_question(context: CallbackContext):
     if not questions:
         logger.warning("No questions left!")
         return
@@ -64,72 +63,78 @@ async def post_question(application: Application):
     question = questions.pop(0)
     keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in question["options"]]
 
-    message = await application.bot.send_message(
+    message = context.bot.send_message(
         chat_id=CHANNEL_ID,
         text=question["question"],
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
-    application.bot_data["current_question"] = question
-    application.bot_data["question_message_id"] = message.message_id
+    context.bot_data["current_question"] = question
+    context.bot_data["question_message_id"] = message.message_id
 
 # Handle user responses
-async def handle_response(update: Update, context):
+def handle_response(update: Update, context: CallbackContext):
     query = update.callback_query
     user_id = query.from_user.id
     answer = query.data
     current_question = context.bot_data.get("current_question", {})
 
     if answer == current_question.get("correct_answer"):
-        await query.answer("Correct!")
-        await context.bot.edit_message_text(
+        query.answer("Correct!")
+        context.bot.edit_message_text(
             chat_id=CHANNEL_ID,
             message_id=context.bot_data["question_message_id"],
             text=f"✅ {current_question['question']}\n\nCorrect answer: {answer}"
         )
     else:
-        await query.answer("Incorrect!", show_alert=True)
+        query.answer("Incorrect!", show_alert=True)
 
 # Post the leaderboard
-async def post_leaderboard(application: Application):
+def post_leaderboard(context: CallbackContext):
     sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
     leaderboard_text = "🏆 **Leaderboard** 🏆\n"
     leaderboard_text += "\n".join([f"{i+1}. {user}: {score}" for i, (user, score) in enumerate(sorted_leaderboard[:10])])
 
-    await application.bot.send_message(chat_id=CHANNEL_ID, text=leaderboard_text)
+    context.bot.send_message(chat_id=CHANNEL_ID, text=leaderboard_text)
 
 # Start command
-async def start(update: Update, context):
-    await update.message.reply_text("Hello! I'm your quiz bot!")
+def start(update: Update, context: CallbackContext):
+    update.message.reply_text("Hello! I'm your quiz bot!")
 
 # Test command
-async def test(update: Update, context):
-    await update.message.reply_text("Bot is running!")
+def test(update: Update, context: CallbackContext):
+    update.message.reply_text("Bot is running!")
 
 # Webhook setup
-async def start_bot():
-    application = Application.builder().token(TOKEN).build()
+def main():
+    updater = Updater(TOKEN, use_context=True)
+    dispatcher = updater.dispatcher
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("test", test))
-    application.add_handler(CallbackQueryHandler(handle_response))
+    dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(CommandHandler("test", test))
+    dispatcher.add_handler(CallbackQueryHandler(handle_response))
 
-    await fetch_questions()
-    await fetch_leaderboard()
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(fetch_questions())
+    loop.run_until_complete(fetch_leaderboard())
 
     # Scheduler for daily questions and leaderboard
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(post_question, "cron", hour=8, minute=0, day_of_week="*", args=[application])
-    scheduler.add_job(post_question, "cron", hour=12, minute=0, day_of_week="*", args=[application])
-    scheduler.add_job(post_question, "cron", hour=18, minute=0, day_of_week="*", args=[application])
-    scheduler.add_job(post_leaderboard, "cron", hour=23, minute=0, day_of_week="*", args=[application])
+    scheduler.add_job(post_question, "cron", hour=8, minute=0, day_of_week="*", args=[dispatcher])
+    scheduler.add_job(post_question, "cron", hour=12, minute=0, day_of_week="*", args=[dispatcher])
+    scheduler.add_job(post_question, "cron", hour=18, minute=0, day_of_week="*", args=[dispatcher])
+    scheduler.add_job(post_leaderboard, "cron", hour=23, minute=0, day_of_week="*", args=[dispatcher])
     scheduler.start()
 
     # Webhook setup
-    await application.bot.set_webhook(url=WEBHOOK_URL)
-    await application.run_webhook(port=PORT, webhook_url=WEBHOOK_URL)
+    updater.start_webhook(
+        listen="0.0.0.0",
+        port=8443,
+        url_path=TOKEN,
+        webhook_url=WEBHOOK_URL
+    )
 
-# Run bot
+    updater.idle()
+
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(start_bot())
+    main()
