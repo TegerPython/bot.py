@@ -136,7 +136,11 @@ bot_app.add_handler(CallbackQueryHandler(handle_answer))
 def webhook():
     """Handle incoming Telegram updates."""
     update = Update.de_json(request.get_json(), bot_app.bot)
-    asyncio.create_task(bot_app.process_update(update))
+    
+    # Use the bot's event loop to process the update
+    loop = asyncio.get_event_loop()
+    loop.create_task(bot_app.process_update(update))
+    
     return "OK", 200
 
 async def run():
