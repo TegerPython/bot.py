@@ -1,145 +1,107 @@
 import logging
-import os
 import json
-import datetime
 import asyncio
 import aiohttp
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+import datetime
+from telegram import Update, Bot
 from telegram.ext import (
     Application,
+    CallbackContext,
     CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
+    MessageHandler,
+    filters,
 )
-
-# Enable logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+import os
 
 # Load environment variables
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", 0))  # Convert to int
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-PORT = int(os.getenv("PORT", 8443))  # Default to 8443
-
-# Load questions
+CHANNEL_ID = os.getenv("CHANNEL_ID")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
-questions = []
-
-# Load leaderboard
 LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
-leaderboard = {}
 
-# Function to fetch questions from GitHub
-async def fetch_questions():
-    global questions
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(QUESTIONS_JSON_URL) as response:
-                if response.status == 200:
-                    questions = await response.json()
-                    logger.info(f"Loaded {len(questions)} questions")
-                else:
-                    logger.error(f"Failed to fetch questions: {response.status}")
-    except Exception as e:
-        logger.error(f"Error fetching questions: {e}")
+# Set up logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
-# Function to fetch leaderboard
-async def fetch_leaderboard():
-    global leaderboard
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(LEADERBOARD_JSON_URL) as response:
-                if response.status == 200:
-                    leaderboard = await response.json()
-                    logger.info(f"Loaded {len(leaderboard)} leaderboard entries")
-                else:
-                    logger.error(f"Failed to fetch leaderboard: {response.status}")
-    except Exception as e:
-        logger.error(f"Error fetching leaderboard: {e}")
+# Async function to fetch JSON safely
+async def fetch_json(url):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            if response.status == 200:
+                text = await response.text()
+                try:
+                    return json.loads(text)  # Manually parse JSON
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON decoding error: {e}")
+            else:
+                logger.error(f"Failed to fetch {url}: {response.status}")
+    return None
 
-# Post a question to the channel
-async def post_question(context: ContextTypes.DEFAULT_TYPE):
+# Command: Start
+async def start(update: Update, context: CallbackContext):
+    await update.message.reply_text("Welcome to the English quiz bot!")
+
+# Post a new question
+async def post_question():
+    logger.info("Posting a new question...")
+    questions = await fetch_json(QUESTIONS_JSON_URL)
     if not questions:
-        logger.warning("No questions left!")
+        logger.error("No questions found.")
         return
-
     question = questions.pop(0)
-    keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in question["options"]]
 
-    message = await context.bot.send_message(
+    # Send question
+    bot = Bot(TOKEN)
+    await bot.send_message(
         chat_id=CHANNEL_ID,
-        text=question["question"],
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        text=f"Question: {question['question']}\nOptions:\nA) {question['options'][0]}\nB) {question['options'][1]}\nC) {question['options'][2]}\nD) {question['options'][3]}",
     )
 
-    context.bot_data["current_question"] = question
-    context.bot_data["question_message_id"] = message.message_id
+# Post leaderboard
+async def post_leaderboard():
+    logger.info("Posting leaderboard...")
+    leaderboard = await fetch_json(LEADERBOARD_JSON_URL)
+    if not leaderboard:
+        logger.error("No leaderboard data found.")
+        return
 
-# Handle user responses
-async def handle_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    answer = query.data
-    current_question = context.bot_data.get("current_question", {})
+    # Format leaderboard text
+    leaderboard_text = "🏆 Leaderboard 🏆\n"
+    for idx, (user, score) in enumerate(leaderboard.items(), start=1):
+        leaderboard_text += f"{idx}. {user}: {score} points\n"
 
-    if answer == current_question.get("correct_answer"):
-        await query.answer("Correct!")
-        await context.bot.edit_message_text(
-            chat_id=CHANNEL_ID,
-            message_id=context.bot_data["question_message_id"],
-            text=f"✅ {current_question['question']}\n\nCorrect answer: {answer}"
-        )
-    else:
-        await query.answer("Incorrect!", show_alert=True)
+    bot = Bot(TOKEN)
+    await bot.send_message(chat_id=CHANNEL_ID, text=leaderboard_text)
 
-# Post the leaderboard
-async def post_leaderboard(context: ContextTypes.DEFAULT_TYPE):
-    sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
-    leaderboard_text = "🏆 **Leaderboard** 🏆\n"
-    leaderboard_text += "\n".join([f"{i+1}. {user}: {score}" for i, (user, score) in enumerate(sorted_leaderboard[:10])])
-
-    await context.bot.send_message(chat_id=CHANNEL_ID, text=leaderboard_text)
-
-# Start command
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hello! I'm your quiz bot!")
-
-# Test command
-async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bot is running!")
-
-# Webhook and scheduler setup
+# Main function
 async def main():
     app = Application.builder().token(TOKEN).build()
 
-    # Add handlers
+    # Add command handlers
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("test", test))
-    app.add_handler(CallbackQueryHandler(handle_response))
 
-    # Fetch initial data
-    await fetch_questions()
-    await fetch_leaderboard()
-
-    # Scheduler for daily questions and leaderboard
+    # Setup scheduler
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(post_question, "cron", hour=8, minute=0, day_of_week="*", args=[ContextTypes.DEFAULT_TYPE])
-    scheduler.add_job(post_question, "cron", hour=12, minute=0, day_of_week="*", args=[ContextTypes.DEFAULT_TYPE])
-    scheduler.add_job(post_question, "cron", hour=18, minute=0, day_of_week="*", args=[ContextTypes.DEFAULT_TYPE])
-    scheduler.add_job(post_leaderboard, "cron", hour=23, minute=0, day_of_week="*", args=[ContextTypes.DEFAULT_TYPE])
+    scheduler.add_job(post_question, CronTrigger(hour=8, minute=0))
+    scheduler.add_job(post_question, CronTrigger(hour=12, minute=0))
+    scheduler.add_job(post_question, CronTrigger(hour=18, minute=0))
+    scheduler.add_job(post_leaderboard, CronTrigger(hour=23, minute=59))
     scheduler.start()
 
-    # Start webhook on port 8443
-    await app.bot.set_webhook(url=WEBHOOK_URL)
+    # Start webhook
+    logger.info("Starting webhook...")
     await app.run_webhook(
         listen="0.0.0.0",
-        port=PORT,
-        url_path=TOKEN
+        port=8443,  # ✅ Runs on port 8443
+        webhook_url=WEBHOOK_URL,
     )
 
+# Run the bot
 if __name__ == "__main__":
     asyncio.run(main())
