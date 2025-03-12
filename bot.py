@@ -52,7 +52,7 @@ async def post_question(update: Update, context: CallbackContext) -> None:
 # Set up a scheduler to post questions
 def setup_scheduler(application: Application):
     scheduler = BackgroundScheduler()
-    scheduler.add_job(post_question, 'interval', minutes=60, args=[application])
+    scheduler.add_job(lambda: post_question(update=None, context=None), 'interval', minutes=60)
     scheduler.start()
 
 # Main function to start the bot
