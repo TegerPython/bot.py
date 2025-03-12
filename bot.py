@@ -1,89 +1,78 @@
+import logging
 import os
-import telebot
-import requests
 import json
-import time
-from datetime import datetime
+import httpx
 from apscheduler.schedulers.background import BackgroundScheduler
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, CallbackQueryHandler
+
+# Set up logging
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Environment variables
-TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-CHANNEL_ID = os.getenv('CHANNEL_ID')
-QUESTIONS_JSON_URL = os.getenv('QUESTIONS_JSON_URL')
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 LEADERBOARD_JSON_URL = os.getenv('LEADERBOARD_JSON_URL')
-OWNER_TELEGRAM_ID = os.getenv('OWNER_TELEGRAM_ID')
-WEBHOOK_URL = os.getenv('WEBHOOK_URL')
+QUESTIONS_JSON_URL = os.getenv('QUESTIONS_JSON_URL')
+CHANNEL_ID = os.getenv('CHANNEL_ID')
 
-bot = telebot.TeleBot(TOKEN)
-scheduler = BackgroundScheduler()
+# Global variables
+questions_data = []
+leaderboard_data = {}
 
-# Helper functions
-def fetch_json_data(url):
-    response = requests.get(url)
-    return response.json() if response.status_code == 200 else None
+# Load questions from JSON URL
+def load_questions():
+    global questions_data
+    response = httpx.get(QUESTIONS_JSON_URL)
+    if response.status_code == 200:
+        questions_data = response.json()
 
-def update_json_data(url, data):
-    headers = {'Authorization': f'token {os.getenv("GITHUB_TOKEN")}'}
-    update_url = f"https://api.github.com/repos/{os.getenv('REPO_OWNER')}/{os.getenv('REPO_NAME')}/contents/{url}"
-    message = {'message': 'Updated questions', 'content': json.dumps(data)}
-    response = requests.put(update_url, headers=headers, json=message)
-    return response.status_code == 200
+# Load leaderboard from JSON URL
+def load_leaderboard():
+    global leaderboard_data
+    response = httpx.get(LEADERBOARD_JSON_URL)
+    if response.status_code == 200:
+        leaderboard_data = response.json()
 
-def send_question_to_channel(question):
-    bot.send_message(CHANNEL_ID, f"Question: {question['question']}\nOptions: {', '.join(question['options'])}")
+# Start command - Welcome message
+async def start(update: Update, context: CallbackContext) -> None:
+    await update.message.reply_text("Hello! I am your competitive English bot. Ready to start?")
 
-def update_leaderboard(user_id, points):
-    leaderboard = fetch_json_data(LEADERBOARD_JSON_URL)
-    if leaderboard is None:
-        leaderboard = {}
+# Help command - Instructions for the bot
+async def help_command(update: Update, context: CallbackContext) -> None:
+    await update.message.reply_text("This bot will send you daily English questions! Answer correctly and compete on the leaderboard.")
 
-    if user_id in leaderboard:
-        leaderboard[user_id] += points
-    else:
-        leaderboard[user_id] = points
-    
-    update_json_data("leaderboard.json", leaderboard)
+# Load a new question
+async def post_question(update: Update, context: CallbackContext) -> None:
+    if questions_data:
+        question = questions_data.pop(0)
+        await update.message.reply_text(f"Question: {question['question']}")
 
-# Scheduler functions
-def post_daily_questions():
-    questions = fetch_json_data(QUESTIONS_JSON_URL)
-    if questions and len(questions) > 0:
-        question = questions.pop(0)
-        send_question_to_channel(question)
-        update_json_data("questions.json", questions)
+# Set up a scheduler to post questions
+def setup_scheduler(application: Application):
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(post_question, 'interval', minutes=60, args=[application])
+    scheduler.start()
 
-# Bot commands
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    bot.reply_to(message, "Welcome! Ready to play? Let's go!")
+# Main function to start the bot
+def main():
+    load_questions()
+    load_leaderboard()
 
-@bot.message_handler(commands=['test'])
-def test(message):
-    bot.reply_to(message, "Test successful!")
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-@bot.message_handler(func=lambda message: True)
-def handle_message(message):
-    text = message.text.lower()
-    if text in ["option1", "option2", "option3", "option4"]:
-        response = "Correct!"  # This will need to be customized for the actual correct answer.
-        bot.reply_to(message, response)
+    # Command Handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
 
-# Set up scheduler to post questions at specified times
-scheduler.add_job(post_daily_questions, 'interval', hours=8, start_date=datetime.now())
-scheduler.start()
+    # Message Handlers
+    application.add_handler(MessageHandler(filters.TEXT, post_question))
 
-# Webhook setup
-@bot.route('/webhook', methods=['POST'])
-def webhook():
-    json_str = request.get_data().decode('UTF-8')
-    update = telebot.types.Update.de_json(json_str)
-    bot.process_new_updates([update])
+    # Set up scheduler for automatic question posting
+    setup_scheduler(application)
 
-# Start the bot with webhook
-bot.remove_webhook()
-bot.set_webhook(url=WEBHOOK_URL)
+    application.run_polling()
 
-# Keep the program running
 if __name__ == '__main__':
-    while True:
-        time.sleep(60)  # Keep running the scheduler
+    main()
