@@ -1,77 +1,65 @@
-import logging
-import os
-import json
-import httpx
-from apscheduler.schedulers.background import BackgroundScheduler
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.job import Job
+import json
+import requests
+import asyncio
 
-# Set up logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Assuming the 'questions.json' file holds the list of questions.
+QUESTIONS_JSON_URL = "https://github.com/TegerPython/bot_data/blob/main/questions.json"
 
-# Environment variables
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-LEADERBOARD_JSON_URL = os.getenv('LEADERBOARD_JSON_URL')
-QUESTIONS_JSON_URL = os.getenv('QUESTIONS_JSON_URL')
-CHANNEL_ID = os.getenv('CHANNEL_ID')
+# Store the current question index to prevent duplication
+current_question_index = 0
 
-# Global variables
-questions_data = []
-leaderboard_data = {}
+# Function to load the latest question from the JSON
+def get_latest_question():
+    global current_question_index
+    # Replace this with your actual method to fetch the latest question
+    response = requests.get(QUESTIONS_JSON_URL)
+    questions = response.json()
+    
+    # Get the next question based on the index, if available
+    if current_question_index < len(questions):
+        question = questions[current_question_index]
+        current_question_index += 1
+        return question
+    else:
+        return None  # No more questions available
 
-# Load questions from JSON URL
-def load_questions():
-    global questions_data
-    response = httpx.get(QUESTIONS_JSON_URL)
-    if response.status_code == 200:
-        questions_data = response.json()
-
-# Load leaderboard from JSON URL
-def load_leaderboard():
-    global leaderboard_data
-    response = httpx.get(LEADERBOARD_JSON_URL)
-    if response.status_code == 200:
-        leaderboard_data = response.json()
-
-# Start command - Welcome message
-async def start(update: Update, context: CallbackContext) -> None:
-    await update.message.reply_text("Hello! I am your competitive English bot. Ready to start?")
-
-# Help command - Instructions for the bot
-async def help_command(update: Update, context: CallbackContext) -> None:
-    await update.message.reply_text("This bot will send you daily English questions! Answer correctly and compete on the leaderboard.")
-
-# Load a new question
-async def post_question(update: Update, context: CallbackContext) -> None:
-    if questions_data:
-        question = questions_data.pop(0)
+# Post a question
+async def post_question(update: Update, context):
+    question = get_latest_question()
+    if question:
         await update.message.reply_text(f"Question: {question['question']}")
+    else:
+        await update.message.reply_text("No more questions available!")
 
-# Set up a scheduler to post questions
+# Command handler for testing
+async def test_command(update: Update, context):
+    question = get_latest_question()
+    if question:
+        await update.message.reply_text(f"Test Question: {question['question']}")
+    else:
+        await update.message.reply_text("No question available for testing!")
+
+# Function to set up the scheduler for regular posting
 def setup_scheduler(application: Application):
     scheduler = BackgroundScheduler()
-    scheduler.add_job(lambda: post_question(update=None, context=None), 'interval', minutes=60)
+    scheduler.add_job(post_question, 'interval', minutes=60, args=[application])  # Adjust interval as needed
     scheduler.start()
 
-# Main function to start the bot
+# Main entry point
 def main():
-    load_questions()
-    load_leaderboard()
+    application = Application.builder().token('YOUR_BOT_TOKEN').build()
 
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    # Set up handlers for commands
+    application.add_handler(CommandHandler("test", test_command))  # Command for testing questions
 
-    # Command Handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-
-    # Message Handlers
-    application.add_handler(MessageHandler(filters.TEXT, post_question))
-
-    # Set up scheduler for automatic question posting
+    # Start the scheduler
     setup_scheduler(application)
 
+    # Run the bot
     application.run_polling()
 
 if __name__ == '__main__':
