@@ -1,8 +1,8 @@
-python-telegram-bot==20.6
+python-telegram-bot==20.0
 Flask>=2.0.0
 pytz
 Werkzeug==2.2.3
-apscheduler==3.10.4
+apscheduler==3.9.1
 httpx
 requests==2.32.3
 aiohttp
