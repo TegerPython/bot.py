@@ -87,4 +87,3 @@ bot.set_webhook(url=WEBHOOK_URL)
 if __name__ == '__main__':
     while True:
         time.sleep(60)  # Keep running the scheduler
-
