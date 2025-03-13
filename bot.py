@@ -171,8 +171,7 @@ async def run_bot():
         listen="0.0.0.0",
         port=PORT,
         url_path="webhook",
-        webhook_url=WEBHOOK_URL,
-        handle_signals=False  # Critical fix for threading
+        webhook_url=WEBHOOK_URL
     )
 
 def start_bot():
@@ -187,5 +186,5 @@ if __name__ == '__main__':
     bot_thread.daemon = True
     bot_thread.start()
 
-    # Run Flask in main thread
+    # Run Flask in main thread with Gunicorn
     flask_app.run(host='0.0.0.0', port=8443, use_reloader=False)
