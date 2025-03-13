@@ -1,13 +1,13 @@
+import os
 from telegram import Update
 from telegram.ext import Application, CommandHandler
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.job import Job
-import json
 import requests
-import asyncio
+import json
 
-# Assuming the 'questions.json' file holds the list of questions.
-QUESTIONS_JSON_URL = "https://github.com/TegerPython/bot_data/blob/main/questions.json"
+# Use environment variables for the bot token
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
 
 # Store the current question index to prevent duplication
 current_question_index = 0
@@ -51,7 +51,7 @@ def setup_scheduler(application: Application):
 
 # Main entry point
 def main():
-    application = Application.builder().token('YOUR_BOT_TOKEN').build()
+    application = Application.builder().token(BOT_TOKEN).build()
 
     # Set up handlers for commands
     application.add_handler(CommandHandler("test", test_command))  # Command for testing questions
