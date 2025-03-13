@@ -14,7 +14,7 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Must be HTTPS, e.g., https://bot-py-dcpa.onrender.com/webhook
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Must be HTTPS, e.g. https://bot-py-dcpa.onrender.com/webhook
 PORT = int(os.getenv("PORT", "8443"))
 
 # Configure logging
@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 # Initialize the Telegram bot application (webhook mode)
 application = Application.builder().token(TOKEN).build()
+
+# Global variable for the dedicated event loop for telegram Application
+telegram_loop = None
 
 # Initialize APScheduler for posting questions automatically
 scheduler = BackgroundScheduler()
@@ -151,24 +154,31 @@ flask_app = Flask(__name__)
 def webhook_handler():
     """
     Handles incoming webhook POST requests from Telegram.
+    Processes the update on the dedicated telegram_loop.
     """
     if request.method == 'POST':
         update = Update.de_json(request.get_json(force=True), application.bot)
-        # Properly await the coroutine processing the update
-        asyncio.run(application.process_update(update))
+        # Schedule the coroutine on the dedicated event loop
+        asyncio.run_coroutine_threadsafe(application.process_update(update), telegram_loop)
         return 'OK', 200
 
 # ----------------------- Main Entry Point -----------------------
 
 def main():
+    global telegram_loop
+    # Create a dedicated event loop for the telegram Application and initialize it
+    telegram_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(telegram_loop)
+    telegram_loop.run_until_complete(application.initialize())
+    
     setup_scheduler()
 
     # Register command handlers
     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
     application.add_handler(CommandHandler("test", test_command))
 
-    # Set the webhook asynchronously and wait for it to complete
-    asyncio.run(application.bot.set_webhook(url=WEBHOOK_URL))
+    # Set the webhook and wait for it to complete
+    telegram_loop.run_until_complete(application.bot.set_webhook(url=WEBHOOK_URL))
     logger.info("Webhook set. Starting Flask server...")
 
     # Start Flask server to listen for webhook updates
