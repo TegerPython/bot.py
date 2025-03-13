@@ -6,7 +6,8 @@ from datetime import datetime, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue
 import pytz
-from telegram.error import BadRequest
+from flask import Flask, request
+from telegram.ext import Dispatcher
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
-RENDER_URL = os.getenv("RENDER_URL") # using RENDER_URL
+RENDER_URL = os.getenv("RENDER_URL")
 PORT = int(os.getenv("PORT"))
 
 # Leaderboard file
@@ -150,10 +151,19 @@ def get_utc_time(hour, minute, tz_name):
     local_time = tz.localize(datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0))
     return local_time.astimezone(pytz.utc).time()
 
+# Flask setup
+flask_app = Flask(__name__)
+application = Application.builder().token(BOT_TOKEN).build()
+dispatcher = Dispatcher(application, None)
+
+@flask_app.route(f"/{BOT_TOKEN}", methods=["POST"])
+async def webhook():
+    await dispatcher.process_update(Update.de_json(request.get_json(force=True), application.bot))
+    return "OK"
+
 def main():
     load_leaderboard()
 
-    application = Application.builder().token(BOT_TOKEN).build()
     job_queue = application.job_queue
 
     job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
@@ -167,14 +177,5 @@ def main():
     application.add_handler(CommandHandler("test", test_question))
     application.add_handler(CallbackQueryHandler(handle_answer))
 
-    webhook_url = f"{RENDER_URL}/{BOT_TOKEN}"
-
-    try:
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=BOT_TOKEN,
-            webhook_url=webhook_url,
-        )
-    except BadRequest as e:
-        logger.error
+if __name__ == "__main__":
+    main()
