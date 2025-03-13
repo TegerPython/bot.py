@@ -1,63 +1,71 @@
 import os
-from telegram import Update
+import json
+import requests
+from telegram import Bot
 from telegram.ext import Application, CommandHandler
 from apscheduler.schedulers.background import BackgroundScheduler
-import requests
-import json
 
-# Use environment variables for the bot token
+# Load environment variables
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
+CHANNEL_ID = os.getenv("CHANNEL_ID")  # The channel where the bot will post
 
-# Store the current question index to prevent duplication
+# Create a bot instance
+bot = Bot(token=BOT_TOKEN)
+
+# Store the current question index
 current_question_index = 0
 
-# Function to load the latest question from the JSON
 def get_latest_question():
     global current_question_index
-    # Replace this with your actual method to fetch the latest question
     response = requests.get(QUESTIONS_JSON_URL)
-    questions = response.json()
     
-    # Get the next question based on the index, if available
-    if current_question_index < len(questions):
-        question = questions[current_question_index]
-        current_question_index += 1
-        return question
+    if response.status_code == 200:
+        questions = response.json()
+        
+        if current_question_index < len(questions):
+            question = questions[current_question_index]
+            current_question_index += 1
+            return question
+        else:
+            return None  # No more questions available
     else:
-        return None  # No more questions available
+        return None  # Failed to fetch questions
 
-# Post a question
-async def post_question(update: Update, context):
+# Function to post a question (synchronous wrapper)
+def post_question():
     question = get_latest_question()
+    
     if question:
-        await update.message.reply_text(f"Question: {question['question']}")
+        bot.send_message(chat_id=CHANNEL_ID, text=f"Question: {question['question']}")
     else:
-        await update.message.reply_text("No more questions available!")
+        bot.send_message(chat_id=CHANNEL_ID, text="No more questions available!")
 
-# Command handler for testing
-async def test_command(update: Update, context):
+# Command handler for testing (async function for commands)
+async def test_command(update, context):
     question = get_latest_question()
+    
     if question:
         await update.message.reply_text(f"Test Question: {question['question']}")
     else:
         await update.message.reply_text("No question available for testing!")
 
-# Function to set up the scheduler for regular posting
-def setup_scheduler(application: Application):
+# Scheduler setup
+def setup_scheduler():
     scheduler = BackgroundScheduler()
-    scheduler.add_job(post_question, 'interval', minutes=60, args=[application])  # Adjust interval as needed
+    scheduler.add_job(post_question, 'interval', minutes=60)  # Adjust as needed
     scheduler.start()
+    return scheduler
 
 # Main entry point
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Set up handlers for commands
-    application.add_handler(CommandHandler("test", test_command))  # Command for testing questions
+    # Command handler
+    application.add_handler(CommandHandler("test", test_command))
 
     # Start the scheduler
-    setup_scheduler(application)
+    scheduler = setup_scheduler()
 
     # Run the bot
     application.run_polling()
