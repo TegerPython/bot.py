@@ -7,7 +7,6 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue
 import pytz
 from flask import Flask, request
-from telegram.ext import Dispatcher
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -154,11 +153,10 @@ def get_utc_time(hour, minute, tz_name):
 # Flask setup
 flask_app = Flask(__name__)
 application = Application.builder().token(BOT_TOKEN).build()
-dispatcher = Dispatcher(application, None)
 
 @flask_app.route(f"/{BOT_TOKEN}", methods=["POST"])
 async def webhook():
-    await dispatcher.process_update(Update.de_json(request.get_json(force=True), application.bot))
+    await application.update_queue.put(Update.de_json(request.get_json(force=True), application.bot))
     return "OK"
 
 def main():
