@@ -1,199 +1,163 @@
 import os
 import json
+import httpx
+import schedule
 import logging
-import requests
-import asyncio
-import threading
-from flask import Flask, request
-from telegram import Update
-from telegram.ext import Application, CommandHandler, CallbackContext
+from datetime import datetime
+from telegram import Update, Poll, ParseMode
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, PollAnswerHandler, CallbackContext
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
+from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_ERROR
 
-# Load environment variables
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
-LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
-QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g., https://bot-py-dcpa.onrender.com/webhook
-PORT = int(os.getenv("PORT", "8443"))
-
-# Configure logging
+# Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize the Telegram Application (webhook mode)
-application = Application.builder().token(TOKEN).build()
+# Load environment variables
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+CHANNEL_ID = os.getenv('CHANNEL_ID')
+WEBHOOK_URL = os.getenv('WEBHOOK_URL')
+GITHUB_REPO = os.getenv('GITHUB_REPO')
+GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
+PORT = int(os.getenv('PORT', 8080))
 
-# Global variable for the dedicated event loop for Telegram Application
-telegram_loop = None
+# GitHub API URLs
+QUESTIONS_URL = f'https://api.github.com/repos/{GITHUB_REPO}/contents/questions.json'
+LEADERBOARD_URL = f'https://api.github.com/repos/{GITHUB_REPO}/contents/leaderboard.json'
 
-# Initialize APScheduler for posting questions automatically
+# Initialize the scheduler
 scheduler = BackgroundScheduler()
+scheduler.start()
 
-# ----------------------- Question Management -----------------------
+# Initialize data storage
+questions = []
+leaderboard = {}
 
-def get_latest_question():
-    """
-    Fetches questions from GitHub (via QUESTIONS_JSON_URL), removes the first (oldest) question,
-    updates the GitHub file, and returns the removed question.
-    """
-    try:
-        response = requests.get(QUESTIONS_JSON_URL)
-        if response.status_code == 200:
-            questions = response.json()
-            if questions:
-                latest_question = questions.pop(0)  # Use the first question
-                update_questions_json(questions)
-                return latest_question
-            else:
-                return None
-        else:
-            logger.error("Failed to fetch questions.")
-            return None
-    except Exception as e:
-        logger.error(f"Error fetching questions: {e}")
-        return None
+# Function to fetch data from GitHub
+async def fetch_github_data():
+    async with httpx.AsyncClient() as client:
+        questions_response = await client.get(QUESTIONS_URL, headers={'Authorization': f'token {GITHUB_TOKEN}'})
+        leaderboard_response = await client.get(LEADERBOARD_URL, headers={'Authorization': f'token {GITHUB_TOKEN}'})
+        if questions_response.status_code == 200:
+            questions_data = questions_response.json()
+            questions_content = base64.b64decode(questions_data[0]['content']).decode('utf-8')
+            global questions
+            questions = json.loads(questions_content)
+        if leaderboard_response.status_code == 200:
+            leaderboard_data = leaderboard_response.json()
+            leaderboard_content = base64.b64decode(leaderboard_data[0]['content']).decode('utf-8')
+            global leaderboard
+            leaderboard = json.loads(leaderboard_content)
 
-def update_questions_json(updated_questions):
-    """
-    Updates the questions.json file on GitHub by removing the used question.
-    """
-    try:
-        headers = {"Authorization": f"token {os.getenv('GITHUB_TOKEN')}"}
-        update_data = {
-            "message": "Remove used question",
-            "content": json.dumps(updated_questions, indent=2).encode("utf-8").decode("latin1"),
-            "sha": get_file_sha("questions.json"),
+# Function to update data on GitHub
+async def update_github_data():
+    async with httpx.AsyncClient() as client:
+        # Update questions.json
+        questions_content = json.dumps(questions, indent=4)
+        questions_encoded = base64.b64encode(questions_content.encode('utf-8')).decode('utf-8')
+        questions_payload = {
+            'message': 'Update questions.json',
+            'content': questions_encoded
         }
-        url = f"https://api.github.com/repos/{os.getenv('REPO_OWNER')}/{os.getenv('REPO_NAME')}/contents/questions.json"
-        response = requests.put(url, headers=headers, json=update_data)
-        if response.status_code not in [200, 201]:
-            logger.error(f"Failed to update questions JSON: {response.text}")
-    except Exception as e:
-        logger.error(f"Error updating questions JSON: {e}")
+        await client.put(QUESTIONS_URL, json=questions_payload, headers={'Authorization': f'token {GITHUB_TOKEN}'})
+        # Update leaderboard.json
+        leaderboard_content = json.dumps(leaderboard, indent=4)
+        leaderboard_encoded = base64.b64encode(leaderboard_content.encode('utf-8')).decode('utf-8')
+        leaderboard_payload = {
+            'message': 'Update leaderboard.json',
+            'content': leaderboard_encoded
+        }
+        await client.put(LEADERBOARD_URL, json=leaderboard_payload, headers={'Authorization': f'token {GITHUB_TOKEN}'})
 
-def get_file_sha(filename):
-    """
-    Retrieves the SHA of the file from GitHub, needed to update the file.
-    """
-    headers = {"Authorization": f"token {os.getenv('GITHUB_TOKEN')}"}
-    url = f"https://api.github.com/repos/{os.getenv('REPO_OWNER')}/{os.getenv('REPO_NAME')}/contents/{filename}"
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        return response.json()["sha"]
-    return None
-
-def post_question():
-    """
-    Synchronously posts a new question to the Telegram channel.
-    """
-    question = get_latest_question()
-    if question:
-        application.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=f"🔥 *New Question!* 🔥\n\n{question['question']}",
-            parse_mode="Markdown",
+# Function to send a question
+async def send_question(context: CallbackContext):
+    if questions:
+        question = questions.pop(0)
+        options = question['options']
+        correct_option_id = options.index(question['answer'])
+        poll = await context.bot.send_poll(
+            CHANNEL_ID,
+            question['question'],
+            options,
+            is_anonymous=False,
+            correct_option_id=correct_option_id,
+            explanation="Please select the correct answer.",
+            explanation_parse_mode=ParseMode.MARKDOWN
         )
-    else:
-        application.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text="No more questions available!",
-            parse_mode="Markdown",
-        )
+        logger.info(f"Sent poll: {poll.poll_id}")
+        await update_github_data()
 
-# ----------------------- Command Handlers -----------------------
+# Function to handle poll answers
+async def poll_answer_handler(update: Update, context: CallbackContext):
+    user_id = update.poll_answer.user.id
+    option_ids = update.poll_answer.option_ids
+    if user_id not in leaderboard:
+        leaderboard[user_id] = 0
+    if option_ids:
+        correct_option_id = 0  # Assuming the first option is correct
+        if option_ids[0] == correct_option_id:
+            leaderboard[user_id] += 1
+            await context.bot.send_message(
+                CHANNEL_ID,
+                f"User {update.poll_answer.user.full_name} answered correctly! Current score: {leaderboard[user_id]}"
+            )
+            await update_github_data()
 
-async def leaderboard_command(update: Update, context: CallbackContext):
-    """
-    Fetches and displays the leaderboard from GitHub.
-    """
-    try:
-        response = requests.get(LEADERBOARD_JSON_URL)
-        if response.status_code == 200:
-            leaderboard = response.json()
-            if not leaderboard:
-                await update.message.reply_text("🏆 Leaderboard is empty!")
-                return
-            sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
-            leaderboard_text = "🏆 *Leaderboard* 🏆\n\n"
-            for rank, (user, score) in enumerate(sorted_leaderboard[:10], start=1):
-                leaderboard_text += f"{rank}. {user}: {score} points\n"
-            await update.message.reply_text(leaderboard_text, parse_mode="Markdown")
-        else:
-            await update.message.reply_text("⚠️ Failed to load leaderboard data.")
-    except Exception as e:
-        logger.error(f"Error fetching leaderboard: {e}")
-        await update.message.reply_text("⚠️ Error fetching leaderboard.")
+# Function to handle /test command
+async def test(update: Update, context: CallbackContext):
+    await update.message.reply_text("Bot is online!")
 
-async def test_command(update: Update, context: CallbackContext):
-    """
-    Test command: When used privately, it fetches a question from QUESTIONS_JSON_URL
-    and posts it to the designated channel, updating the file just like the main scheduled posts.
-    """
-    question = get_latest_question()
-    if question:
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=f"Test Question: {question['question']}",
-            parse_mode="Markdown",
-        )
-    else:
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text="No question available for testing!",
-            parse_mode="Markdown",
-        )
+# Main function to set up the bot
+async def main():
+    # Create the Application and pass it your bot's token
+    application = Application.builder().token(BOT_TOKEN).build()
 
-# ----------------------- Scheduler Setup -----------------------
+    # Fetch initial data from GitHub
+    await fetch_github_data()
 
-def setup_scheduler():
-    """
-    Sets up the scheduler to post questions at 8:00 AM, 12:00 PM, and 6:00 PM.
-    """
-    scheduler.add_job(post_question, CronTrigger(hour=8, minute=0))
-    scheduler.add_job(post_question, CronTrigger(hour=12, minute=0))
-    scheduler.add_job(post_question, CronTrigger(hour=18, minute=0))
-    scheduler.start()
+    # Set up command handlers
+    application.add_handler(CommandHandler('test', test))
 
-# ----------------------- Flask Webhook Setup -----------------------
+    # Set up poll answer handler
+    application.add_handler(PollAnswerHandler(poll_answer_handler))
 
-flask_app = Flask(__name__)
+    # Set up daily job to send questions
+    scheduler.add_job(
+        send_question,
+        'cron',
+        hour=8,
+        minute=0,
+        second=0,
+        timezone='Asia/Gaza',
+        context=application
+    )
+    scheduler.add_job(
+        send_question,
+        'cron',
+        hour=12,
+        minute=0,
+        second=0,
+        timezone='Asia/Gaza',
+        context=application
+    )
+    scheduler.add_job(
+        send_question,
+        'cron',
+        hour=18,
+        minute=0,
+        second=0,
+        timezone='Asia/Gaza',
+        context=application
+    )
 
-@flask_app.route('/webhook', methods=['POST'])
-def webhook_handler():
-    """
-    Handles incoming webhook POST requests from Telegram.
-    Schedules processing of the update on the dedicated telegram_loop.
-    """
-    if request.method == 'POST':
-        update = Update.de_json(request.get_json(force=True), application.bot)
-        asyncio.run_coroutine_threadsafe(application.process_update(update), telegram_loop)
-        return 'OK', 200
-
-# ----------------------- Main Entry Point -----------------------
-
-def main():
-    global telegram_loop
-    # Create and set the dedicated event loop for the Telegram Application
-    telegram_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(telegram_loop)
-    telegram_loop.run_until_complete(application.initialize())
-    # Run the dedicated event loop in a separate thread so it can process updates continuously
-    threading.Thread(target=telegram_loop.run_forever, daemon=True).start()
-
-    setup_scheduler()
-
-    # Register command handlers
-    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
-    application.add_handler(CommandHandler("test", test_command))
-
-    # Set the webhook on the dedicated loop and wait for completion
-    asyncio.run_coroutine_threadsafe(application.bot.set_webhook(url=WEBHOOK_URL), telegram_loop).result()
-    logger.info("Webhook set. Starting Flask server...")
-
-    # Start Flask server to listen for webhook updates
-    flask_app.run(host="0.0.0.0", port=PORT)
+    # Run the bot until you send a signal to stop
+    await application.run_webhook(
+        listen='0.0.0.0',
+        port=PORT,
+        url_path=WEBHOOK_URL.strip('/'),
+        webhook_url=WEBHOOK_URL
+    )
 
 if __name__ == '__main__':
-    main()
+    import asyncio
+    asyncio.run(main())
