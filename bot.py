@@ -1,12 +1,12 @@
 import os
 import json
 import logging
-import asyncio
-import random  # Added for /test command
+import random
 from datetime import datetime, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue
 import pytz
+from telegram.error import BadRequest
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
-WEBHOOK_URL = os.getenv("RENDER_WEBHOOK_URL")
-PORT = int(os.getenv("PORT")) #Get port from environment variable.
+RENDER_URL = os.getenv("RENDER_URL") # using RENDER_URL
+PORT = int(os.getenv("PORT"))
 
 # Leaderboard file
 LEADERBOARD_FILE = "leaderboard.json"
@@ -35,16 +35,23 @@ current_message_id = None
 
 def load_leaderboard():
     global leaderboard
-    if os.path.exists(LEADERBOARD_FILE):
-        with open(LEADERBOARD_FILE, "r") as file:
-            leaderboard = json.load(file)
-    else:
-        logger.warning("⚠️ No leaderboard file found, starting fresh.")
+    try:
+        if os.path.exists(LEADERBOARD_FILE):
+            with open(LEADERBOARD_FILE, "r") as file:
+                leaderboard = json.load(file)
+        else:
+            logger.warning("⚠️ No leaderboard file found, starting fresh.")
+            leaderboard = {}
+    except Exception as e:
+        logger.error(f"Error loading leaderboard: {e}")
         leaderboard = {}
 
 def save_leaderboard():
-    with open(LEADERBOARD_FILE, "w") as file:
-        json.dump(leaderboard, file, indent=2)
+    try:
+        with open(LEADERBOARD_FILE, "w") as file:
+            json.dump(leaderboard, file, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving leaderboard: {e}")
 
 async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> None:
     global current_question, answered_users, current_message_id
@@ -58,12 +65,15 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> No
     keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in current_question["options"]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    message = await context.bot.send_message(
-        chat_id=CHANNEL_ID,
-        text=f"📝 {'Test' if is_test else 'Daily'} Challenge:\n\n{current_question['question']}",
-        reply_markup=reply_markup
-    )
-    current_message_id = message.message_id
+    try:
+        message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=f"📝 {'Test' if is_test else 'Daily'} Challenge:\n\n{current_question['question']}",
+            reply_markup=reply_markup
+        )
+        current_message_id = message.message_id
+    except Exception as e:
+        logger.error(f"Error sending question: {e}")
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     global answered_users, current_question, current_message_id
@@ -105,18 +115,27 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await query.answer("❌ Incorrect.")
 
 async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
-    text = "🏆 Leaderboard:\n\n" + "\n".join([f"{name}: {points} points" for name, points in sorted_leaderboard])
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=text)
+    try:
+        sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
+        text = "🏆 Leaderboard:\n\n" + "\n".join([f"{name}: {points} points" for name, points in sorted_leaderboard])
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=text)
+    except Exception as e:
+        logger.error(f"Error showing leaderboard: {e}")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
+    try:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
+    except Exception as e:
+        logger.error(f"Heartbeat error: {e}")
 
 async def send_daily_leaderboard(context: ContextTypes.DEFAULT_TYPE) -> None:
-    sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
-    text = "🏆 Daily Leaderboard:\n\n" + "\n".join([f"{name}: {points} points" for name, points in sorted_leaderboard])
-    await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
+    try:
+        sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
+        text = "🏆 Daily Leaderboard:\n\n" + "\n".join([f"{name}: {points} points" for name, points in sorted_leaderboard])
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
+    except Exception as e:
+        logger.error(f"Error sending daily leaderboard: {e}")
 
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != OWNER_ID:
@@ -137,7 +156,6 @@ def main():
     application = Application.builder().token(BOT_TOKEN).build()
     job_queue = application.job_queue
 
-    # Use pytz conversion for Gaza timezone times
     job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
     job_queue.run_daily(send_question, get_utc_time(12, 0, "Asia/Gaza"))
     job_queue.run_daily(send_question, get_utc_time(18, 0, "Asia/Gaza"))
@@ -146,16 +164,17 @@ def main():
     job_queue.run_repeating(heartbeat, interval=60)
 
     application.add_handler(CommandHandler("leaderboard", show_leaderboard))
-    application.add_handler(CommandHandler("test", test_question))  # Added
+    application.add_handler(CommandHandler("test", test_question))
     application.add_handler(CallbackQueryHandler(handle_answer))
 
-    # Webhook configuration
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT, # using the port from environment variables.
-        url_path=BOT_TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-    )
+    webhook_url = f"{RENDER_URL}/{BOT_TOKEN}"
 
-if __name__ == "__main__":
-    main()
+    try:
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=BOT_TOKEN,
+            webhook_url=webhook_url,
+        )
+    except BadRequest as e:
+        logger.error
