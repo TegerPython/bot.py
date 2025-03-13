@@ -35,8 +35,8 @@ scheduler = BackgroundScheduler()
 
 def get_latest_question():
     """
-    Fetches questions from GitHub, removes the first (oldest) question, updates the GitHub file,
-    and returns the removed question.
+    Fetches questions from GitHub (via QUESTIONS_JSON_URL), removes the first (oldest) question,
+    updates the GitHub file, and returns the removed question.
     """
     try:
         response = requests.get(QUESTIONS_JSON_URL)
@@ -128,13 +128,22 @@ async def leaderboard_command(update: Update, context: CallbackContext):
 
 async def test_command(update: Update, context: CallbackContext):
     """
-    Test command to immediately post a test question.
+    Test command: When used privately, it fetches a question from QUESTIONS_JSON_URL
+    and posts it to the designated channel, updating the file just like the main scheduled posts.
     """
     question = get_latest_question()
     if question:
-        await update.message.reply_text(f"Test Question: {question['question']}")
+        await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=f"Test Question: {question['question']}",
+            parse_mode="Markdown",
+        )
     else:
-        await update.message.reply_text("No question available for testing!")
+        await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text="No question available for testing!",
+            parse_mode="Markdown",
+        )
 
 # ----------------------- Scheduler Setup -----------------------
 
@@ -159,7 +168,6 @@ def webhook_handler():
     """
     if request.method == 'POST':
         update = Update.de_json(request.get_json(force=True), application.bot)
-        # Schedule the update processing on the dedicated loop
         asyncio.run_coroutine_threadsafe(application.process_update(update), telegram_loop)
         return 'OK', 200
 
