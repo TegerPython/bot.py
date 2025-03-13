@@ -1,113 +1,174 @@
 import os
+import json
 import logging
+import requests
 from flask import Flask, request
-from telegram import Update, Bot, ParseMode
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
-)
-from telegram.error import TelegramError
+from telegram import Update
+from telegram.ext import Application, CommandHandler, CallbackContext
 from apscheduler.schedulers.background import BackgroundScheduler
-import random
 
-# Enable logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+# Load environment variables
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
+QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Must be HTTPS
+PORT = int(os.getenv("PORT", "8443"))
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize Flask app
-app = Flask(__name__)
-
-# Retrieve environment variables
-TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-WEBHOOK_URL = os.getenv('WEBHOOK_URL')
-CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
-
-# Initialize bot and application
-bot = Bot(token=TOKEN)
+# Initialize the Telegram bot application (webhook mode)
 application = Application.builder().token(TOKEN).build()
 
-# Sample questions
-questions = [
-    "What is the capital of France?",
-    "Who wrote 'To Kill a Mockingbird'?",
-    "What is the chemical symbol for gold?",
-    "Who painted the Mona Lisa?",
-    "What is the largest planet in our solar system?"
-]
-
-# Dictionary to store user scores
-user_scores = {}
-
-# Function to post a question to the channel
-async def post_question():
-    question = random.choice(questions)
-    message = await bot.send_message(chat_id=CHANNEL_ID, text=question)
-    application.job_queue.run_once(
-        lambda _: reveal_answer(question, message.message_id),
-        60  # Reveal answer after 60 seconds
-    )
-
-# Function to reveal the answer
-async def reveal_answer(question, message_id):
-    answer = "The answer to the question is..."
-    await bot.send_message(
-        chat_id=CHANNEL_ID,
-        text=answer,
-        reply_to_message_id=message_id
-    )
-
-# Command handler to start the quiz
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('Welcome to the quiz bot!')
-
-# Command handler to display the leaderboard
-async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if user_scores:
-        leaderboard_text = "🏆 Leaderboard 🏆\n\n"
-        sorted_scores = sorted(user_scores.items(), key=lambda x: x[1], reverse=True)
-        for user, score in sorted_scores:
-            leaderboard_text += f"{user}: {score} points\n"
-        await update.message.reply_text(leaderboard_text)
-    else:
-        await update.message.reply_text("No scores yet. Be the first to answer a question!")
-
-# Message handler to process answers
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.message.from_user.username
-    text = update.message.text
-    # Logic to check if the answer is correct
-    if text.lower() == "correct answer":  # Replace with actual answer checking
-        user_scores[user] = user_scores.get(user, 0) + 1
-        await update.message.reply_text(f"Correct, {user}! Your score is now {user_scores[user]}.")
-
-# Set up the scheduler to post questions at regular intervals
+# Initialize APScheduler for posting questions automatically
 scheduler = BackgroundScheduler()
-scheduler.add_job(post_question, 'interval', minutes=60)  # Adjust interval as needed
-scheduler.start()
 
-# Set up command and message handlers
-application.add_handler(CommandHandler('start', start))
-application.add_handler(CommandHandler('leaderboard', leaderboard))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+# ----------------------- Question Management -----------------------
 
-# Flask route to handle incoming webhook updates
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    update = Update.de_json(request.get_json(), bot)
-    application.update_queue.put(update)
-    return 'OK'
+def get_latest_question():
+    """
+    Fetches questions from GitHub, removes the first (oldest) question, updates the GitHub file,
+    and returns the removed question.
+    """
+    try:
+        response = requests.get(QUESTIONS_JSON_URL)
+        if response.status_code == 200:
+            questions = response.json()
+            if questions:
+                latest_question = questions.pop(0)  # Use the first question
+                update_questions_json(questions)
+                return latest_question
+            else:
+                return None
+        else:
+            logger.error("Failed to fetch questions.")
+            return None
+    except Exception as e:
+        logger.error(f"Error fetching questions: {e}")
+        return None
 
-# Function to set the webhook
-def set_webhook():
-    webhook_url = f"{WEBHOOK_URL}/webhook"
-    bot.set_webhook(webhook_url)
+def update_questions_json(updated_questions):
+    """
+    Updates the questions.json file on GitHub by removing the used question.
+    """
+    try:
+        headers = {"Authorization": f"token {os.getenv('GITHUB_TOKEN')}"}
+        update_data = {
+            "message": "Remove used question",
+            "content": json.dumps(updated_questions, indent=2).encode("utf-8").decode("latin1"),
+            "sha": get_file_sha("questions.json"),
+        }
+        url = f"https://api.github.com/repos/{os.getenv('REPO_OWNER')}/{os.getenv('REPO_NAME')}/contents/questions.json"
+        response = requests.put(url, headers=headers, json=update_data)
+        if response.status_code not in [200, 201]:
+            logger.error(f"Failed to update questions JSON: {response.text}")
+    except Exception as e:
+        logger.error(f"Error updating questions JSON: {e}")
+
+def get_file_sha(filename):
+    """
+    Retrieves the SHA of the file from GitHub, needed to update the file.
+    """
+    headers = {"Authorization": f"token {os.getenv('GITHUB_TOKEN')}"}
+    url = f"https://api.github.com/repos/{os.getenv('REPO_OWNER')}/{os.getenv('REPO_NAME')}/contents/{filename}"
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return response.json()["sha"]
+    return None
+
+def post_question():
+    """
+    Synchronously posts a new question to the Telegram channel.
+    """
+    question = get_latest_question()
+    if question:
+        application.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=f"🔥 *New Question!* 🔥\n\n{question['question']}",
+            parse_mode="Markdown",
+        )
+    else:
+        application.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text="No more questions available!",
+            parse_mode="Markdown",
+        )
+
+# ----------------------- Command Handlers -----------------------
+
+async def leaderboard_command(update: Update, context: CallbackContext):
+    """
+    Fetches and displays the leaderboard from GitHub.
+    """
+    try:
+        response = requests.get(LEADERBOARD_JSON_URL)
+        if response.status_code == 200:
+            leaderboard = response.json()
+            if not leaderboard:
+                await update.message.reply_text("🏆 Leaderboard is empty!")
+                return
+            sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
+            leaderboard_text = "🏆 *Leaderboard* 🏆\n\n"
+            for rank, (user, score) in enumerate(sorted_leaderboard[:10], start=1):
+                leaderboard_text += f"{rank}. {user}: {score} points\n"
+            await update.message.reply_text(leaderboard_text, parse_mode="Markdown")
+        else:
+            await update.message.reply_text("⚠️ Failed to load leaderboard data.")
+    except Exception as e:
+        logger.error(f"Error fetching leaderboard: {e}")
+        await update.message.reply_text("⚠️ Error fetching leaderboard.")
+
+async def test_command(update: Update, context: CallbackContext):
+    """
+    Test command to immediately post a test question.
+    """
+    question = get_latest_question()
+    if question:
+        await update.message.reply_text(f"Test Question: {question['question']}")
+    else:
+        await update.message.reply_text("No question available for testing!")
+
+# ----------------------- Scheduler Setup -----------------------
+
+def setup_scheduler():
+    """
+    Sets up the scheduler to automatically post a question every 60 minutes.
+    Adjust the interval as needed.
+    """
+    scheduler.add_job(post_question, "interval", minutes=60)
+    scheduler.start()
+
+# ----------------------- Flask Webhook Setup -----------------------
+
+flask_app = Flask(__name__)
+
+@flask_app.route('/webhook', methods=['POST'])
+def webhook_handler():
+    """
+    Handles incoming webhook POST requests from Telegram.
+    """
+    if request.method == 'POST':
+        update = Update.de_json(request.get_json(force=True), application.bot)
+        application.process_update(update)
+        return 'OK', 200
+
+# ----------------------- Main Entry Point -----------------------
+
+def main():
+    setup_scheduler()
+
+    # Register command handlers
+    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
+    application.add_handler(CommandHandler("test", test_command))
+
+    # Set the webhook so Telegram can send updates to your server
+    application.bot.set_webhook(url=WEBHOOK_URL)
+    logger.info("Webhook set. Starting Flask server...")
+
+    # Start Flask server to listen for webhook updates
+    flask_app.run(host="0.0.0.0", port=PORT)
 
 if __name__ == '__main__':
-    set_webhook()
-    app.run(host='0.0.0.0', port=8443)
+    main()
