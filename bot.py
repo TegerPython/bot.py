@@ -4,6 +4,8 @@ import datetime
 import logging
 import base64
 import httpx
+import threading
+import asyncio
 from flask import Flask
 from telegram import Update, Poll
 from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler
@@ -153,7 +155,7 @@ def setup_jobs(application):
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot operational!")
 
-def start_bot():
+async def run_bot():
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("test", test_command))
     application.add_handler(PollAnswerHandler(poll_answer_handler))
@@ -163,38 +165,26 @@ def start_bot():
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
     PORT = int(os.getenv("PORT", 8443))
     
-    async def run():
-        await load_data()
-        await application.bot.set_webhook(WEBHOOK_URL)
-        await application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path="webhook",
-            webhook_url=WEBHOOK_URL
-        )
-    
-    return run()
+    await load_data()
+    await application.bot.set_webhook(WEBHOOK_URL)
+    await application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path="webhook",
+        webhook_url=WEBHOOK_URL
+    )
 
-if __name__ == '__main__':
-    import asyncio
-    
-    # Create a new event loop
+def start_bot():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
-    try:
-        # Start the bot
-        loop.run_until_complete(start_bot())
-        
-        # Start Flask app in a separate thread
-        from threading import Thread
-        flask_thread = Thread(target=lambda: flask_app.run(host='0.0.0.0', port=8443))
-        flask_thread.daemon = True
-        flask_thread.start()
-        
-        # Keep the main thread running
-        loop.run_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        loop.close()
+    loop.run_until_complete(run_bot())
+    loop.close()
+
+if __name__ == '__main__':
+    # Start the bot in a separate thread
+    bot_thread = threading.Thread(target=start_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+
+    # Start Flask in the main thread
+    flask_app.run(host='0.0.0.0', port=8443)
