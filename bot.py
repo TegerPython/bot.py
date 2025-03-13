@@ -10,6 +10,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHa
 
 # Flask setup
 flask_app = Flask(__name__)
+
 @flask_app.route('/')
 def health_check():
     return "Bot operational", 200
@@ -166,4 +167,12 @@ async def main():
     
     await application.bot.set_webhook(WEBHOOK_URL)
     await application.run_webhook(
-       
+        listen="0.0.0.0",
+        port=PORT,
+        url_path="webhook",
+        webhook_url=WEBHOOK_URL
+    )
+
+if __name__ == '__main__':
+    import asyncio
+    asyncio.run(main())
