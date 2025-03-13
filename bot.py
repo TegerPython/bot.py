@@ -1,6 +1,6 @@
 import os
 import json
-import httpx
+import requests
 from flask import Flask, request, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.daily import DailyTrigger
@@ -33,61 +33,57 @@ leaderboard = {}
 # Function to fetch questions from GitHub
 def fetch_questions():
     global questions
-    async with httpx.AsyncClient() as client:
-        response = await client.get(QUESTIONS_JSON_URL)
-        if response.status_code == 200:
-            questions = response.json()
-        else:
-            questions = []
+    response = requests.get(QUESTIONS_JSON_URL)
+    if response.status_code == 200:
+        questions = response.json()
+    else:
+        questions = []
 
 # Function to fetch leaderboard from GitHub
 def fetch_leaderboard():
     global leaderboard
-    async with httpx.AsyncClient() as client:
-        response = await client.get(LEADERBOARD_JSON_URL)
-        if response.status_code == 200:
-            leaderboard = response.json()
-        else:
-            leaderboard = {}
+    response = requests.get(LEADERBOARD_JSON_URL)
+    if response.status_code == 200:
+        leaderboard = response.json()
+    else:
+        leaderboard = {}
 
 # Function to send a question to the channel
-async def send_question():
+def send_question():
     if questions:
         question = questions.pop(0)
         options = question.get('options', [])
-        message = await bot.send_poll(
+        message = bot.send_poll(
             chat_id=CHANNEL_ID,
             question=question.get('question', ''),
             options=options,
             is_anonymous=False
         )
         # Update questions in GitHub
-        async with httpx.AsyncClient() as client:
-            await client.put(
-                QUESTIONS_JSON_URL,
-                headers={'Authorization': f'token {GITHUB_TOKEN}'},
-                json=questions
-            )
+        response = requests.put(
+            QUESTIONS_JSON_URL,
+            headers={'Authorization': f'token {GITHUB_TOKEN}'},
+            json=questions
+        )
 
 # Function to handle answers
-async def handle_answer(update: Update, context: CallbackContext):
+def handle_answer(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
     answer = update.message.text
     if user_id not in leaderboard:
         leaderboard[user_id] = 0
     if answer == 'correct_answer':  # Replace with actual answer checking logic
         leaderboard[user_id] += 1
-        await bot.send_message(
+        bot.send_message(
             chat_id=CHANNEL_ID,
             text=f"User {update.message.from_user.username} answered correctly! Total points: {leaderboard[user_id]}"
         )
         # Update leaderboard in GitHub
-        async with httpx.AsyncClient() as client:
-            await client.put(
-                LEADERBOARD_JSON_URL,
-                headers={'Authorization': f'token {GITHUB_TOKEN}'},
-                json=leaderboard
-            )
+        response = requests.put(
+            LEADERBOARD_JSON_URL,
+            headers={'Authorization': f'token {GITHUB_TOKEN}'},
+            json=leaderboard
+        )
 
 # Set up daily question posting
 scheduler.add_job(
@@ -108,7 +104,7 @@ scheduler.start()
 
 # Set up webhook route
 @app.route('/webhook', methods=['POST'])
-async def webhook():
+def webhook():
     update = Update.de_json(request.get_json(force=True), bot)
     dispatcher.process_update(update)
     return jsonify({'status': 'ok'}), 200
@@ -126,7 +122,6 @@ def setup():
     dispatcher = Dispatcher(bot, update_queue=None)
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_answer))
 
-# Run the Flask app with an ASGI server
+# Run the Flask app
 if __name__ == '__main__':
-    import uvicorn
-    uvicorn.run(app, host='0.0.0.0', port=PORT)
+    app.run(host='0.0.0.0', port=PORT)
