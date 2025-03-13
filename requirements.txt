@@ -3,7 +3,7 @@ Flask>=2.0.0
 pytz
 Werkzeug==2.2.3
 apscheduler==3.10.4
-httpx~=0.23.1
+httpx>=0.23.1,<0.26.0  # Compatible with both our needs and PTB 20.6
 requests==2.32.3
 aiohttp
 gunicorn==21.2.0
