@@ -13,7 +13,7 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Must be an HTTPS URL
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Must be HTTPS
 PORT = int(os.getenv("PORT", "8443"))
 
 # Configure logging
@@ -152,7 +152,8 @@ def webhook_handler():
     """
     if request.method == 'POST':
         update = Update.de_json(request.get_json(force=True), application.bot)
-        application.process_update(update)
+        # Await the processing of the update
+        asyncio.run(application.process_update(update))
         return 'OK', 200
 
 # ----------------------- Main Entry Point -----------------------
