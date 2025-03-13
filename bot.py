@@ -4,6 +4,7 @@ import datetime
 import logging
 import base64
 import httpx
+import threading
 import asyncio
 from flask import Flask
 from telegram import Update, Poll
@@ -173,10 +174,14 @@ async def run_bot():
         webhook_url=WEBHOOK_URL
     )
 
-if __name__ == '__main__':
-    # Run the bot directly in the main thread
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(run_bot())
-
-    # Run Flask in main thread with Gunicorn
+def start_flask():
     flask_app.run(host='0.0.0.0', port=8443, use_reloader=False)
+
+if __name__ == '__main__':
+    # Start Flask in a separate thread
+    flask_thread = threading.Thread(target=start_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+
+    # Run the bot in the main thread
+    asyncio.run(run_bot())
