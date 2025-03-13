@@ -4,6 +4,7 @@ import datetime
 import logging
 import base64
 import httpx
+import threading
 import asyncio
 from flask import Flask
 from telegram import Update, Poll
@@ -173,10 +174,25 @@ async def run_bot():
         webhook_url=WEBHOOK_URL
     )
 
-if __name__ == '__main__':
-    # Run bot and Flask together in the main thread
-    loop = asyncio.get_event_loop()
-    loop.create_task(run_bot())  # Run bot asynchronously
+def start_bot():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    # Critical fix: Disable signal handling in this thread
+    def noop_signal_handler(*args, **kwargs):
+        pass
+    loop.add_signal_handler = noop_signal_handler
+    
+    try:
+        loop.run_until_complete(run_bot())
+    finally:
+        loop.close()
 
-    # Run Flask in the same event loop for webhook handling
-    flask_app.run(host='0.0.0.0', port=8443, use_reloader=False, debug=False)
+if __name__ == '__main__':
+    # Start bot in a daemon thread
+    bot_thread = threading.Thread(target=start_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+
+    # Run Flask in main thread with production settings
+    flask_app.run(host='0.0.0.0', port=8443, use_reloader=False)
