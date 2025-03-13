@@ -132,19 +132,24 @@ async def post_leaderboard(context: ContextTypes.DEFAULT_TYPE):
 
 def setup_jobs(application):
     job_queue = application.job_queue
-    job_queue.run_daily(send_question, time=datetime.time(8, 0))  # 8 AM
-    job_queue.run_daily(send_question, time=datetime.time(12, 0))  # 12 PM
-    job_queue.run_daily(send_question, time=datetime.time(18, 0))  # 6 PM
+    job_queue.run_daily(send_question, time=datetime.time(8, 0))
+    job_queue.run_daily(send_question, time=datetime.time(12, 0))
+    job_queue.run_daily(send_question, time=datetime.time(18, 0))
+    job_queue.run_daily(post_leaderboard, time=datetime.time(19, 0))  # Optional leaderboard post daily
 
 async def main():
+    application = Application.builder().token(BOT_TOKEN).build()
+
+    # Load data from GitHub
     await load_data()
 
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_handler(PollAnswerHandler(poll_answer_handler))
-    application.add_handler(CommandHandler("test", post_leaderboard))  # Owner command to check leaderboard
-
+    # Set up scheduled jobs
     setup_jobs(application)
 
+    # Add handlers
+    application.add_handler(PollAnswerHandler(poll_answer_handler))
+
+    # Start the bot
     await application.run_polling()
 
 if __name__ == '__main__':
