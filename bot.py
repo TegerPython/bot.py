@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import requests
+import asyncio
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, CallbackContext
@@ -12,7 +13,7 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Must be HTTPS
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Must be an HTTPS URL
 PORT = int(os.getenv("PORT", "8443"))
 
 # Configure logging
@@ -57,7 +58,6 @@ def update_questions_json(updated_questions):
         headers = {"Authorization": f"token {os.getenv('GITHUB_TOKEN')}"}
         update_data = {
             "message": "Remove used question",
-            # Encode content in a way GitHub API expects (using latin1 here for simplicity)
             "content": json.dumps(updated_questions, indent=2).encode("utf-8").decode("latin1"),
             "sha": get_file_sha("questions.json"),
         }
@@ -152,22 +152,20 @@ def webhook_handler():
     """
     if request.method == 'POST':
         update = Update.de_json(request.get_json(force=True), application.bot)
-        # Process the update using the application's handler
         application.process_update(update)
         return 'OK', 200
 
 # ----------------------- Main Entry Point -----------------------
 
 def main():
-    # Set up the scheduler for automatic question posting
     setup_scheduler()
 
     # Register command handlers
     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
     application.add_handler(CommandHandler("test", test_command))
 
-    # Set the webhook so Telegram can send updates to your server
-    application.bot.set_webhook(url=WEBHOOK_URL)
+    # Set the webhook asynchronously and wait for it to complete
+    asyncio.run(application.bot.set_webhook(url=WEBHOOK_URL))
     logger.info("Webhook set. Starting Flask server...")
 
     # Start Flask server to listen for webhook updates
