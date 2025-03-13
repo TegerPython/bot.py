@@ -1,135 +1,113 @@
 import os
-import json
 import logging
-import requests
-from telegram import Update
-from telegram.ext import Application, CommandHandler, CallbackContext
+from flask import Flask, request
+from telegram import Update, Bot, ParseMode
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
+from telegram.error import TelegramError
 from apscheduler.schedulers.background import BackgroundScheduler
+import random
 
-# Load environment variables
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
-LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
-QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Enable logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-# Initialize Telegram bot application
+# Initialize Flask app
+app = Flask(__name__)
+
+# Retrieve environment variables
+TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+WEBHOOK_URL = os.getenv('WEBHOOK_URL')
+CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
+
+# Initialize bot and application
+bot = Bot(token=TOKEN)
 application = Application.builder().token(TOKEN).build()
 
-# Initialize scheduler
-scheduler = BackgroundScheduler()
+# Sample questions
+questions = [
+    "What is the capital of France?",
+    "Who wrote 'To Kill a Mockingbird'?",
+    "What is the chemical symbol for gold?",
+    "Who painted the Mona Lisa?",
+    "What is the largest planet in our solar system?"
+]
 
-# Function to fetch the latest question
-def get_latest_question():
-    try:
-        response = requests.get(QUESTIONS_JSON_URL)
-        if response.status_code == 200:
-            questions = response.json()
-            if questions:
-                latest_question = questions.pop(0)  # Take the first question
-                # Update the questions JSON (remove used question)
-                update_questions_json(questions)
-                return latest_question
-            else:
-                return None
-        else:
-            logger.error("Failed to fetch questions.")
-            return None
-    except Exception as e:
-        logger.error(f"Error fetching questions: {e}")
-        return None
+# Dictionary to store user scores
+user_scores = {}
 
-# Function to update the questions JSON after removing used questions
-def update_questions_json(updated_questions):
-    try:
-        headers = {"Authorization": f"token {os.getenv('GITHUB_TOKEN')}"}
-        update_data = {
-            "message": "Remove used question",
-            "content": json.dumps(updated_questions).encode("utf-8").decode("latin1"),
-            "sha": get_file_sha("questions.json"),
-        }
-        requests.put(
-            f"https://api.github.com/repos/{os.getenv('REPO_OWNER')}/{os.getenv('REPO_NAME')}/contents/questions.json",
-            headers=headers,
-            json=update_data,
-        )
-    except Exception as e:
-        logger.error(f"Error updating questions JSON: {e}")
-
-# Function to get the latest SHA for the questions JSON file (needed for GitHub updates)
-def get_file_sha(filename):
-    headers = {"Authorization": f"token {os.getenv('GITHUB_TOKEN')}"}
-    response = requests.get(
-        f"https://api.github.com/repos/{os.getenv('REPO_OWNER')}/{os.getenv('REPO_NAME')}/contents/{filename}",
-        headers=headers,
+# Function to post a question to the channel
+async def post_question():
+    question = random.choice(questions)
+    message = await bot.send_message(chat_id=CHANNEL_ID, text=question)
+    application.job_queue.run_once(
+        lambda _: reveal_answer(question, message.message_id),
+        60  # Reveal answer after 60 seconds
     )
-    if response.status_code == 200:
-        return response.json()["sha"]
-    return None
 
-# Function to post a new question to the channel
-def post_question():
-    question = get_latest_question()
+# Function to reveal the answer
+async def reveal_answer(question, message_id):
+    answer = "The answer to the question is..."
+    await bot.send_message(
+        chat_id=CHANNEL_ID,
+        text=answer,
+        reply_to_message_id=message_id
+    )
 
-    if question:
-        application.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=f"🔥 *New Question!* 🔥\n\n{question['question']}",
-            parse_mode="Markdown",
-        )
+# Command handler to start the quiz
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text('Welcome to the quiz bot!')
+
+# Command handler to display the leaderboard
+async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if user_scores:
+        leaderboard_text = "🏆 Leaderboard 🏆\n\n"
+        sorted_scores = sorted(user_scores.items(), key=lambda x: x[1], reverse=True)
+        for user, score in sorted_scores:
+            leaderboard_text += f"{user}: {score} points\n"
+        await update.message.reply_text(leaderboard_text)
     else:
-        application.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text="No more questions available!",
-            parse_mode="Markdown",
-        )
+        await update.message.reply_text("No scores yet. Be the first to answer a question!")
 
-# Leaderboard command function
-async def leaderboard_command(update: Update, context: CallbackContext):
-    try:
-        response = requests.get(LEADERBOARD_JSON_URL)
+# Message handler to process answers
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user.username
+    text = update.message.text
+    # Logic to check if the answer is correct
+    if text.lower() == "correct answer":  # Replace with actual answer checking
+        user_scores[user] = user_scores.get(user, 0) + 1
+        await update.message.reply_text(f"Correct, {user}! Your score is now {user_scores[user]}.")
 
-        if response.status_code == 200:
-            leaderboard = response.json()
+# Set up the scheduler to post questions at regular intervals
+scheduler = BackgroundScheduler()
+scheduler.add_job(post_question, 'interval', minutes=60)  # Adjust interval as needed
+scheduler.start()
 
-            if not leaderboard:
-                await update.message.reply_text("🏆 Leaderboard is empty!")
-                return
+# Set up command and message handlers
+application.add_handler(CommandHandler('start', start))
+application.add_handler(CommandHandler('leaderboard', leaderboard))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-            sorted_leaderboard = sorted(
-                leaderboard.items(), key=lambda x: x[1], reverse=True
-            )
-            leaderboard_text = "🏆 *Leaderboard* 🏆\n\n"
+# Flask route to handle incoming webhook updates
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    update = Update.de_json(request.get_json(), bot)
+    application.update_queue.put(update)
+    return 'OK'
 
-            for rank, (user, score) in enumerate(sorted_leaderboard[:10], start=1):
-                leaderboard_text += f"{rank}. {user}: {score} points\n"
+# Function to set the webhook
+def set_webhook():
+    webhook_url = f"{WEBHOOK_URL}/webhook"
+    bot.set_webhook(webhook_url)
 
-            await update.message.reply_text(leaderboard_text, parse_mode="Markdown")
-        else:
-            await update.message.reply_text("⚠️ Failed to load leaderboard data.")
-
-    except Exception as e:
-        logger.error(f"Error fetching leaderboard: {e}")
-        await update.message.reply_text("⚠️ Error fetching leaderboard.")
-
-# Setup scheduler to post questions at intervals
-def setup_scheduler():
-    scheduler.add_job(post_question, "interval", minutes=60)
-    scheduler.start()
-
-# Main entry point
-def main():
-    setup_scheduler()
-
-    # Register command handlers
-    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
-
-    logger.info("Bot is running...")
-    application.run_polling()
-
-# Run bot
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    set_webhook()
+    app.run(host='0.0.0.0', port=8443)
