@@ -1,9 +1,7 @@
-python-telegram-bot[webhooks]
+python-telegram-bot[webhook]==20.6
 Flask>=2.0.0
 pytz
 Werkzeug==2.2.3
 apscheduler==3.10.4
-httpx>=0.23.1,<0.26.0
-requests==2.32.3
-aiohttp
+httpx~=0.23.1
 gunicorn==21.2.0
