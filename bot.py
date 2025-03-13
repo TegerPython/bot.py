@@ -7,13 +7,14 @@ from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, CallbackContext
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 # Load environment variables
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Must be HTTPS
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Must be HTTPS, e.g., https://bot-py-dcpa.onrender.com/webhook
 PORT = int(os.getenv("PORT", "8443"))
 
 # Configure logging
@@ -135,10 +136,11 @@ async def test_command(update: Update, context: CallbackContext):
 
 def setup_scheduler():
     """
-    Sets up the scheduler to automatically post a question every 60 minutes.
-    Adjust the interval as needed.
+    Sets up the scheduler to post questions at 8:00 AM, 12:00 PM, and 6:00 PM.
     """
-    scheduler.add_job(post_question, "interval", minutes=60)
+    scheduler.add_job(post_question, CronTrigger(hour=8, minute=0))
+    scheduler.add_job(post_question, CronTrigger(hour=12, minute=0))
+    scheduler.add_job(post_question, CronTrigger(hour=18, minute=0))
     scheduler.start()
 
 # ----------------------- Flask Webhook Setup -----------------------
@@ -152,7 +154,7 @@ def webhook_handler():
     """
     if request.method == 'POST':
         update = Update.de_json(request.get_json(force=True), application.bot)
-        # Await the processing of the update
+        # Properly await the coroutine processing the update
         asyncio.run(application.process_update(update))
         return 'OK', 200
 
