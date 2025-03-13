@@ -8,7 +8,6 @@ import asyncio
 from flask import Flask
 from telegram import Update, Poll
 from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler
-from multiprocessing import Process
 
 # Flask setup
 flask_app = Flask(__name__)
@@ -158,6 +157,26 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def run_bot():
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("test", test_command))
+    application.add_handler(PollAnswerHandler(poll_answer_handler))
+    
+    setup_jobs(application)
 
-::contentReference[oaicite:2]{index=2}
- 
+    WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+    PORT = int(os.getenv("PORT", 8443))
+    
+    await load_data()
+    await application.bot.set_webhook(WEBHOOK_URL)
+    await application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path="webhook",
+        webhook_url=WEBHOOK_URL
+    )
+
+if __name__ == '__main__':
+    # Run bot and Flask together in the main thread
+    loop = asyncio.get_event_loop()
+    loop.create_task(run_bot())  # Run bot asynchronously
+
+    # Run Flask in the same event loop for webhook handling
+    flask_app.run(host='0.0.0.0', port=8443, use_reloader=False, debug=False)
