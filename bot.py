@@ -178,7 +178,10 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_answer))
 
     # Start Flask development server (NOT RECOMMENDED for production)
-    flask_app.run(host="0.0.0.0", port=int(PORT))
+    try:
+        flask_app.run(host="0.0.0.0", port=int(PORT))
+    except Exception as e:
+        logger.error(f"Flask server startup error: {e}")
 
 if __name__ == "__main__":
     main()
