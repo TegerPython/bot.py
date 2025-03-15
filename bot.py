@@ -134,7 +134,7 @@ async def show_leaderboard(context: ContextTypes.DEFAULT_TYPE):
 
 def schedule_tasks(app):
     """Simplified scheduling with timezone"""
-    tz = datetime.timezone(datetime.timedelta(hours=3))  UTC+3
+    tz = datetime.timezone(datetime.timedelta(hours=3))  # UTC+3  <-- FIXED COMMENT
     schedule = [
         (post_question, datetime.time(8, 0, tzinfo=tz)),
         (post_question, datetime.time(12, 0, tzinfo=tz)),
@@ -148,7 +148,6 @@ def schedule_tasks(app):
             time=time,
             days=(0, 1, 2, 3, 4, 5, 6)
         )
-
 async def start_bot():
     """Main bot initialization"""
     app = Application.builder().token(BOT_TOKEN).build()
