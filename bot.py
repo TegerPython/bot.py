@@ -8,14 +8,14 @@ from telegram import Update, Poll
 from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler
 import httpx
 
-# Logging setup
+# Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Environment variables
+# Environment configuration
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
@@ -24,172 +24,163 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 REPO_OWNER = os.getenv("REPO_OWNER")
 REPO_NAME = os.getenv("REPO_NAME")
 
-# In-memory storage
-questions = []
-leaderboard = {}
-current_poll_id = None
-answered_users = set()
-polls_data = {}
+# State management
+quiz_state = {
+    "questions": [],
+    "leaderboard": {},
+    "active_poll": None,
+    "responded_users": set(),
+    "polls": {}
+}
 
-async def fetch_json_from_github(url):
-    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+async def manage_github_data(action: str, file_path: str = None, data: dict = None):
+    """Universal GitHub data handler using REST API"""
     async with httpx.AsyncClient() as client:
-        response = await client.get(url, headers=headers)
-        response.raise_for_status()
-        return response.json()
+        if action == "fetch":
+            url = QUESTIONS_JSON_URL if file_path == "questions" else LEADERBOARD_JSON_URL
+            response = await client.get(
+                url,
+                headers={"Authorization": f"token {GITHUB_TOKEN}"}
+            )
+            return response.json()
+        
+        elif action == "update":
+            url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{file_path}"
+            
+            # Get existing SHA
+            existing = await client.get(url, headers={"Authorization": f"token {GITHUB_TOKEN}"})
+            sha = existing.json().get("sha") if existing.status_code == 200 else None
+            
+            # Prepare update
+            content = base64.b64encode(json.dumps(data).encode()).decode()
+            payload = {
+                "message": "Auto-update from bot",
+                "content": content,
+                "sha": sha
+            }
+            
+            await client.put(
+                url,
+                json=payload,
+                headers={"Authorization": f"token {GITHUB_TOKEN}"}
+            )
 
-async def upload_json_to_github(file_path, data, message):
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{file_path}"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
-
-    async with httpx.AsyncClient() as client:
-        # Get current SHA
-        response = await client.get(url, headers=headers)
-        sha = response.json().get("sha") if response.status_code == 200 else None
-
-        # Prepare content
-        content = json.dumps(data, indent=4).encode('utf-8')
-        base64_content = base64.b64encode(content).decode('utf-8')
-
-        payload = {
-            "message": message,
-            "content": base64_content,
-            "sha": sha
-        }
-
-        response = await client.put(url, headers=headers, json=payload)
-        response.raise_for_status()
-
-async def load_data():
-    global questions, leaderboard
+async def initialize_bot_data():
+    """Alternative data loading approach with fallback"""
     try:
-        questions = await fetch_json_from_github(QUESTIONS_JSON_URL)
-        leaderboard = await fetch_json_from_github(LEADERBOARD_JSON_URL)
-        logger.info(f"Data loaded: {len(questions)} questions, {len(leaderboard)} scores")
+        quiz_state["questions"] = await manage_github_data("fetch", "questions")
+        quiz_state["leaderboard"] = await manage_github_data("fetch", "leaderboard")
+        logger.info("Data initialized successfully")
     except Exception as e:
-        logger.error(f"Data load failed: {e}")
+        logger.error(f"Data initialization failed: {e}")
+        quiz_state["questions"] = []
+        quiz_state["leaderboard"] = {}
 
-async def send_question(context: ContextTypes.DEFAULT_TYPE):
-    global current_poll_id, answered_users, polls_data
-
-    if not questions:
-        logger.warning("No questions available")
+async def post_question(context: ContextTypes.DEFAULT_TYPE):
+    """New question posting logic with state validation"""
+    if not quiz_state["questions"]:
+        logger.warning("Question queue empty")
         return
-
+    
+    question = quiz_state["questions"].pop(0)
     try:
-        question_data = questions.pop(0)
         poll = await context.bot.send_poll(
             chat_id=CHANNEL_ID,
-            question=question_data['question'],
-            options=question_data['options'],
+            question=question["question"],
+            options=question["options"],
             type=Poll.QUIZ,
-            correct_option_id=question_data['correct_option_id'],
-            explanation=question_data.get('explanation', '')
+            correct_option_id=question["correct_option_id"],
+            explanation=question.get("explanation", "")
         )
         
-        current_poll_id = poll.poll.id
-        answered_users = set()
-        polls_data[current_poll_id] = poll.poll
+        # Update state
+        quiz_state.update({
+            "active_poll": poll.poll.id,
+            "responded_users": set(),
+            "polls": {**quiz_state["polls"], poll.poll.id: poll.poll}
+        })
         
-        await upload_json_to_github("questions.json", questions, "Question used")
+        await manage_github_data("update", "questions.json", quiz_state["questions"])
+        
     except Exception as e:
-        logger.error(f"Failed to send question: {e}")
+        logger.error(f"Question posting failed: {e}")
 
-async def poll_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global leaderboard
-
-    answer = update.poll_answer
-    user_id = answer.user.id
-    username = update.effective_user.username or update.effective_user.first_name
-
-    if answer.poll_id != current_poll_id:
+async def handle_poll_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Simplified answer handling with state checks"""
+    response = update.poll_answer
+    user = update.effective_user
+    
+    # Validate response
+    if (response.poll_id != quiz_state["active_poll"] or 
+        user.id in quiz_state["responded_users"]):
         return
-
-    if user_id in answered_users:
-        logger.info(f"Duplicate answer from {username}")
-        return
-
-    answered_users.add(user_id)
-
-    poll = polls_data.get(answer.poll_id)
-    if not poll:
-        logger.warning("Poll data missing")
-        return
-
-    if answer.option_ids[0] == poll.correct_option_id:
-        leaderboard[username] = leaderboard.get(username, 0) + 1
+    
+    quiz_state["responded_users"].add(user.id)
+    
+    # Verify answer
+    poll = quiz_state["polls"].get(response.poll_id)
+    if poll and response.option_ids[0] == poll.correct_option_id:
+        username = user.username or user.first_name
+        quiz_state["leaderboard"][username] = quiz_state["leaderboard"].get(username, 0) + 1
+        
         await context.bot.send_message(
             chat_id=CHANNEL_ID,
-            text=f"🎉 {username} answered correctly first!"
+            text=f"🌟 {username} got it right first!"
         )
-        await upload_json_to_github("leaderboard.json", leaderboard, "Score update")
+        await manage_github_data("update", "leaderboard.json", quiz_state["leaderboard"])
 
-async def post_leaderboard(context: ContextTypes.DEFAULT_TYPE):
-    sorted_board = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
-    text = "🏆 Leaderboard:\n" + "\n".join(
-        f"{i}. {user}: {score}" for i, (user, score) in enumerate(sorted_board, 1)
+async def publish_leaderboard(context: ContextTypes.DEFAULT_TYPE):
+    """Leaderboard formatting and posting"""
+    sorted_scores = sorted(quiz_state["leaderboard"].items(), 
+                         key=lambda x: x[1], reverse=True)
+    board = "🏆 Leaderboard:\n" + "\n".join(
+        f"{i}. {name}: {points}" for i, (name, points) in enumerate(sorted_scores, 1)
     )
-    await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
+    await context.bot.send_message(chat_id=CHANNEL_ID, text=board)
 
-def setup_jobs(app):
-    # Define your timezone (example: UTC+3)
-    tz = datetime.timezone(datetime.timedelta(hours=3))
-    
-    # Create timezone-aware times
-    question_times = [
-        datetime.time(8, 0, tzinfo=tz),
-        datetime.time(12, 0, tzinfo=tz),
-        datetime.time(18, 0, tzinfo=tz)
+def schedule_tasks(app):
+    """Reimagined scheduling without timezone arguments"""
+    schedule = [
+        (post_question, [8, 12, 18]),
+        (publish_leaderboard, [19])
     ]
-    leaderboard_time = datetime.time(19, 0, tzinfo=tz)
-
-    # Schedule questions
-    for time in question_times:
-        app.job_queue.run_daily(
-            send_question,
-            time=time,
-            days=tuple(range(7))
     
-    # Schedule leaderboard
-    app.job_queue.run_daily(
-        post_leaderboard,
-        time=leaderboard_time,
-        days=tuple(range(7))
-    )
+    for job, hours in schedule:
+        for hour in hours:
+            app.job_queue.run_daily(
+                job,
+                time=datetime.time(hour, 0, tzinfo=datetime.timezone.utc),
+                days=tuple(range(7))
+            )
 
-async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot operational")
+async def health_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """New health monitoring command"""
+    await update.message.reply_text(f"🟢 Operational\nQuestions queued: {len(quiz_state['questions'])}")
 
-async def main():
-    application = Application.builder().token(BOT_TOKEN).build()
+async def run_server():
+    """Revamped server initialization"""
+    bot = Application.builder().token(BOT_TOKEN).build()
     
-    # Add handlers
-    application.add_handler(CommandHandler("test", test_command))
-    application.add_handler(PollAnswerHandler(poll_answer_handler))
+    # Configure handlers
+    bot.add_handler(CommandHandler("health", health_check))
+    bot.add_handler(PollAnswerHandler(handle_poll_response))
     
-    # Load data and setup jobs
-    await load_data()
-    setup_jobs(application)
-
-    # Get Render's required port
-    PORT = int(os.environ.get("PORT", 8443))
-    WEBHOOK_URL = os.environ["WEBHOOK_URL"]
+    # Initialize components
+    await initialize_bot_data()
+    schedule_tasks(bot)
     
-    # Webhook setup
-    await application.bot.set_webhook(
-        url=WEBHOOK_URL,
+    # Webhook configuration
+    await bot.bot.set_webhook(
+        url=os.getenv("WEBHOOK_URL"),
         allowed_updates=Update.ALL_TYPES
     )
     
-    # Start web server
-    await application.run_webhook(
+    # Server setup
+    await bot.run_webhook(
         listen="0.0.0.0",
-        port=PORT,
-        webhook_url=WEBHOOK_URL,
+        port=int(os.getenv("PORT", 8443)),
         url_path="webhook"
     )
-    
-    logger.info(f"✅ Server running on port {PORT}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(run_server())
