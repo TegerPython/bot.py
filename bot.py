@@ -149,7 +149,6 @@ def setup_jobs(app):
             send_question,
             time=time,
             days=tuple(range(7))
-        )
     
     # Schedule leaderboard
     app.job_queue.run_daily(
@@ -182,16 +181,15 @@ async def main():
         allowed_updates=Update.ALL_TYPES
     )
     
-    # Start web server directly
-    await application.start_webhook(
+    # Start web server
+    await application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        url_path="webhook",
-        webhook_url=WEBHOOK_URL
+        webhook_url=WEBHOOK_URL,
+        url_path="webhook"
     )
     
     logger.info(f"✅ Server running on port {PORT}")
-    await asyncio.Event().wait()  # Run forever
 
 if __name__ == "__main__":
     asyncio.run(main())
