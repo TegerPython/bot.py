@@ -62,7 +62,7 @@ async def data_manager():
         try:
             quiz_state["questions"] = await github_api_client("GET", "questions.json")
             quiz_state["leaderboard"] = await github_api_client("GET", "leaderboard.json")
-            logger.info(f"Loaded {len(quiz_state['questions']} questions")
+            logger.info(f"Loaded {len(quiz_state['questions'])} questions")
             return
         except Exception as e:
             logger.error(f"Data load attempt {attempt+1} failed: {e}")
@@ -133,18 +133,19 @@ async def show_leaderboard(context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=CHANNEL_ID, text=board)
 
 def schedule_tasks(app):
-    """Simplified scheduling without timezone conflicts"""
+    """Simplified scheduling with timezone"""
+    tz = datetime.timezone(datetime.timedelta(hours=3))  UTC+3
     schedule = [
-        (post_question, 8),
-        (post_question, 12),
-        (post_question, 18),
-        (show_leaderboard, 19)
+        (post_question, datetime.time(8, 0, tzinfo=tz)),
+        (post_question, datetime.time(12, 0, tzinfo=tz)),
+        (post_question, datetime.time(18, 0, tzinfo=tz)),
+        (show_leaderboard, datetime.time(19, 0, tzinfo=tz))
     ]
     
-    for job, hour in schedule:
+    for job, time in schedule:
         app.job_queue.run_daily(
             job,
-            time=datetime.time(hour, 0),
+            time=time,
             days=(0, 1, 2, 3, 4, 5, 6)
         )
 
@@ -170,14 +171,19 @@ async def start_bot():
     await app.run_webhook(
         listen="0.0.0.0",
         port=int(os.getenv("PORT", 8443)),
-        url_path="webhook"
+        url_path="webhook",
+        webhook_url=os.getenv("WEBHOOK_URL")
     )
 
 if __name__ == "__main__":
-    # Simplified event loop management
+    # Event loop management
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
-        asyncio.get_event_loop().run_until_complete(start_bot())
+        loop.run_until_complete(start_bot())
     except KeyboardInterrupt:
         logger.info("Bot shutdown requested")
     except Exception as e:
         logger.error(f"Fatal error: {e}")
+    finally:
+        loop.close()
