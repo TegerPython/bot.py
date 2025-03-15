@@ -1,187 +1,163 @@
 import os
+import json
+import datetime
 import logging
-import random
-from datetime import datetime, time
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue
-import pytz
-from flask import Flask, request
+import asyncio
+from telegram import Update, Poll
+from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler
+import httpx
+import base64
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Environment Variables
+# Environment variables
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
-OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
-RENDER_URL = os.getenv("RENDER_URL")
-PORT = int(os.getenv("PORT"))
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
+LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+REPO_OWNER = os.getenv("REPO_OWNER")
+REPO_NAME = os.getenv("REPO_NAME")
 
-# Leaderboard file
-LEADERBOARD_FILE = "leaderboard.json"
-
-# Questions
-questions = [
-    {"question": "What is the capital of France?", "options": ["Berlin", "Madrid", "Paris", "Rome"], "answer": "Paris", "explanation": "Paris is the capital city of France."},
-    {"question": "2 + 2 equals?", "options": ["3", "4", "5", "6"], "answer": "4", "explanation": "Simple math!"}
-]
-
+# In-memory storage
+questions = []
 leaderboard = {}
+current_poll_id = None
 answered_users = set()
-current_question = None
-current_message_id = None
+polls_data = {}  # Store poll objects
 
-# Leaderboard functions
-import json
+async def fetch_json_from_github(url):
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
+        return response.json()
 
-def load_leaderboard():
-    global leaderboard
-    try:
-        if os.path.exists(LEADERBOARD_FILE):
-            with open(LEADERBOARD_FILE, "r") as file:
-                leaderboard = json.load(file)
-            else:
-                logger.warning("⚠️ No leaderboard file found, starting fresh.")
-                leaderboard = {}
-        except Exception as e:
-            logger.error(f"Error loading leaderboard: {e}")
-            leaderboard = {}
+async def upload_json_to_github(file_path, data, message):
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{file_path}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
 
-def save_leaderboard():
-    try:
-        with open(LEADERBOARD_FILE, "w") as file:
-            json.dump(leaderboard, file, indent=2)
-        except Exception as e:
-            logger.error(f"Error saving leaderboard: {e}")
+    content = json.dumps(data, indent=4).encode('utf-8')
+    base64_content = base64.b64encode(content).decode('utf-8')
 
-async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> None:
-    global current_question, answered_users, current_message_id
+    # Get current file SHA if it exists
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers)
+        sha = response.json().get("sha") if response.status_code == 200 else None
+
+    payload = {
+        "message": message,
+        "content": base64_content,
+        "sha": sha
+    }
+    async with httpx.AsyncClient() as client:
+        response = await client.put(url, headers=headers, json=payload)
+        response.raise_for_status()
+
+async def load_data():
+    global questions, leaderboard
+    questions = await fetch_json_from_github(QUESTIONS_JSON_URL)
+    leaderboard = await fetch_json_from_github(LEADERBOARD_JSON_URL)
+    logger.info(f"Loaded {len(questions)} questions")
+    logger.info(f"Loaded {len(leaderboard)} leaderboard entries")
+
+async def send_question(context: ContextTypes.DEFAULT_TYPE):
+    global current_poll_id, answered_users, questions, polls_data
+
+    if not questions:
+        logger.warning("No questions left to send!")
+        return
+
+    question_data = questions.pop(0)
+    poll_message = await context.bot.send_poll(
+        chat_id=CHANNEL_ID,
+        question=question_data['question'],
+        options=question_data['options'],
+        type=Poll.QUIZ,
+        correct_option_id=question_data['correct_option_id'],
+        explanation=question_data.get('explanation', '')
+    )
+
+    current_poll_id = poll_message.poll.id
     answered_users = set()
+    polls_data[current_poll_id] = poll_message.poll  # Store the poll object
 
-    if is_test:
-        current_question = random.choice(questions)
-    else:
-        current_question = questions[datetime.now().day % len(questions)]
+    await upload_json_to_github("questions.json", questions, "Remove used question")
 
-    keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in current_question["options"]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+async def poll_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global current_poll_id, answered_users, leaderboard, polls_data
 
-    try:
-        message = await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=f"📝 {'Test' if is_test else 'Daily'} Challenge:\n\n{current_question['question']}",
-            reply_markup=reply_markup
-        )
-        current_message_id = message.message_id
-    except Exception as e:
-        logger.error(f"Error sending question: {e}")
+    poll_answer = update.poll_answer
+    user_id = poll_answer.user.id
+    username = update.effective_user.username or update.effective_user.first_name
 
-async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global answered_users, current_question, current_message_id
-
-    query = update.callback_query
-    user_id = query.from_user.id
-    username = query.from_user.first_name
+    if poll_answer.poll_id != current_poll_id:
+        return
 
     if user_id in answered_users:
-        await query.answer("❌ You already answered this question.")
+        logger.info(f"User {username} already answered.")
         return
 
     answered_users.add(user_id)
-    user_answer = query.data
-    correct = user_answer == current_question["answer"]
 
-    if correct:
-        await query.answer("✅ Correct!")
-        leaderboard[username] = leaderboard.get(username, 0) + 1
-        save_leaderboard()
+    correct_option_id = polls_data.get(poll_answer.poll_id).correct_option_id if polls_data.get(poll_answer.poll_id) else None
 
-        explanation = current_question.get("explanation", "No explanation provided.")
-        edited_text = (
-            "📝 Daily Challenge (Answered)\n\n"
-            f"Question: {current_question['question']}\n"
-            f"✅ Correct Answer: {current_question['answer']}\n"
-            f"ℹ️ Explanation: {explanation}\n\n"
-            f"🏆 Winner: {username} (+1 point)"
-        )
-        try:
-            await context.bot.edit_message_text(
-                chat_id=CHANNEL_ID,
-                message_id=current_message_id,
-                text=edited_text
-            )
-        except Exception as e:
-            logger.error(f"Failed to edit message: {e}")
-    else:
-        await query.answer("❌ Incorrect.")
-
-async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    try:
-        sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
-        text = "🏆 Leaderboard:\n\n" + "\n".join([f"{name}: {points} points" for name, points in sorted_leaderboard])
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=text)
-    except Exception as e:
-        logger.error(f"Error showing leaderboard: {e}")
-
-async def heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
-    try:
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
-    except Exception as e:
-        logger.error(f"Heartbeat error: {e}")
-
-async def send_daily_leaderboard(context: ContextTypes.DEFAULT_TYPE) -> None:
-    try:
-        sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
-        text = "🏆 Daily Leaderboard:\n\n" + "\n".join([f"{name}: {points} points" for name, points in sorted_leaderboard])
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
-    except Exception as e:
-        logger.error(f"Error sending daily leaderboard: {e}")
-
-async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
+    if correct_option_id is None:
+        logger.warning("Correct option ID not found for current poll.")
         return
 
-    await send_question(context, is_test=True)
-    await update.message.reply_text("✅ Test question sent.")
+    if poll_answer.option_ids[0] == correct_option_id:
+        logger.info(f"User {username} answered correctly!")
 
-def get_utc_time(hour, minute, tz_name):
-    tz = pytz.timezone(tz_name)
-    local_time = tz.localize(datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0))
-    return local_time.astimezone(pytz.utc).time()
+        if username not in leaderboard:
+            leaderboard[username] = 0
 
-# Flask setup
-flask_app = Flask(__name__)
-application = Application.builder().token(BOT_TOKEN).build()
+        leaderboard[username] += 1
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=f"🎉 {username} answered correctly first!")
 
-@flask_app.route(f"/{BOT_TOKEN}", methods=["POST"])
-async def webhook():
-    await application.update_queue.put(Update.de_json(request.get_json(force=True), application.bot))
-    return "OK"
+        await upload_json_to_github("leaderboard.json", leaderboard, "Update leaderboard")
 
-def main():
-    load_leaderboard()
+async def post_leaderboard(context: ContextTypes.DEFAULT_TYPE):
+    sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
+    leaderboard_text = "🏆 Leaderboard:\n"
+    for rank, (user, score) in enumerate(sorted_leaderboard, start=1):
+        leaderboard_text += f"{rank}. {user}: {score} points\n"
 
+    await context.bot.send_message(chat_id=CHANNEL_ID, text=leaderboard_text)
+
+def setup_jobs(application):
     job_queue = application.job_queue
+    job_queue.run_daily(send_question, time=datetime.time(8, 0))
+    job_queue.run_daily(send_question, time=datetime.time(12, 0))
+    job_queue.run_daily(send_question, time=datetime.time(18, 0))
+    job_queue.run_daily(post_leaderboard, time=datetime.time(19, 0))
 
-    job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
-    job_queue.run_daily(send_question, get_utc_time(12, 0, "Asia/Gaza"))
-    job_queue.run_daily(send_question, get_utc_time(18, 0, "Asia/Gaza"))
-    job_queue.run_daily(send_daily_leaderboard, get_utc_time(23, 59, "Asia/Gaza"))
+async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("✅ Bot is running!")
 
-    job_queue.run_repeating(heartbeat, interval=60)
+async def main():
+    await load_data()
 
-    application.add_handler(CommandHandler("leaderboard", show_leaderboard))
-    application.add_handler(CommandHandler("test", test_question))
-    application.add_handler(CallbackQueryHandler(handle_answer))
+    application = Application.builder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("test", test_command))
+    application.add_handler(PollAnswerHandler(poll_answer_handler))
 
-    # Start Flask development server (NOT RECOMMENDED for production)
-    try:
-        flask_app.run(host="0.0.0.0", port=int(PORT))
-    except Exception as e:
-        logger.error(f"Flask server startup error: {e}")
+    setup_jobs(application)
+
+    PORT = int(os.getenv("PORT", "10000"))
+    WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+
+    await application.bot.set_webhook(WEBHOOK_URL)
+    logger.info(f"Webhook set to: {WEBHOOK_URL}")
+
+    await application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path="webhook"
+    )
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
