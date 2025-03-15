@@ -12,6 +12,7 @@ from telegram.ext import (
     ContextTypes
 )
 import httpx
+from aiohttp import web
 
 # Configure logging
 logging.basicConfig(
@@ -26,6 +27,7 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 QUESTIONS_URL = os.getenv("QUESTIONS_JSON_URL")
 LEADERBOARD_URL = os.getenv("LEADERBOARD_JSON_URL")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+PORT = int(os.getenv("PORT", 8443))
 
 class QuizBot:
     def __init__(self):
@@ -200,7 +202,30 @@ class QuizBot:
         """Start command handler"""
         await update.message.reply_text("✅ Bot is running!")
 
+    async def webhook_handler(self, request):
+        """Handle incoming webhook requests"""
+        data = await request.json()
+        update = Update.de_json(data, self.app.bot)
+        await self.app.update_queue.put(update)
+        return web.Response()
+
     async def run(self):
         """Start the application"""
         await self.initialize()
-        await self.app.run_poll
+        
+        # Create web server
+        app = web.Application()
+        app.router.add_post('/webhook', self.webhook_handler)
+        
+        # Start web server
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', PORT)
+        await site.start()
+        
+        logger.info(f"Server started on port {PORT}")
+        await asyncio.Event().wait()  # Run forever
+
+if __name__ == "__main__":
+    bot = QuizBot()
+    asyncio.run(bot.run())
