@@ -1,1 +1,1 @@
-web: gunicorn bot:flask_app --bind 0.0.0.0:$PORT
+web: hypercorn bot:main --bind 0.0.0.0:8443
