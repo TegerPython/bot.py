@@ -5,7 +5,7 @@ import logging
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Bot, Update, Poll
-from telegram.ext import Dispatcher, CommandHandler, PollAnswerHandler
+from telegram.ext import Application, CommandHandler, PollAnswerHandler
 
 # Configure logging
 logging.basicConfig(
@@ -33,7 +33,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length)
             update = Update.de_json(json.loads(post_data), bot)
-            dispatcher.process_update(update)
+            application.update_queue.put(update)
             self.send_response(200)
             self.end_headers()
         else:
@@ -45,7 +45,7 @@ def run_server():
     server.serve_forever()
 
 def load_questions():
-    """Simple file-based question loader (replace with your GitHub logic)"""
+    """Simple file-based question loader"""
     try:
         with open('questions.json') as f:
             quiz_data["questions"] = json.load(f)
@@ -60,13 +60,13 @@ def save_leaderboard():
     except Exception as e:
         logger.error(f"Error saving leaderboard: {e}")
 
-def post_question():
+async def post_question():
     if not quiz_data["questions"]:
         return
     
     question = quiz_data["questions"].pop(0)
     try:
-        poll = bot.send_poll(
+        poll = await bot.send_poll(
             chat_id=CHANNEL_ID,
             question=question["question"],
             options=question["options"],
@@ -78,7 +78,7 @@ def post_question():
     except Exception as e:
         logger.error(f"Error posting question: {e}")
 
-def handle_poll_answer(update: Update, context):
+async def handle_poll_answer(update: Update, context):
     answer = update.poll_answer
     user = update.effective_user
     
@@ -98,7 +98,7 @@ def schedule_tasks():
     while True:
         now = time.localtime()
         if now.tm_hour in [8, 12, 18] and now.tm_min == 0:
-            post_question()
+            asyncio.run(post_question())
             time.sleep(61)  # Prevent duplicate posts
         elif now.tm_hour == 19 and now.tm_min == 0:
             # Post leaderboard logic
@@ -106,16 +106,18 @@ def schedule_tasks():
         else:
             time.sleep(30)
 
-if __name__ == '__main__':
-    # Initialize components
-    bot = Bot(token=BOT_TOKEN)
-    dispatcher = Dispatcher(bot, None, workers=0)
+async def main():
+    global bot, application
     
-    # Set webhook
-    bot.set_webhook(url=os.getenv("WEBHOOK_URL"))
+    # Initialize application
+    application = Application.builder().token(BOT_TOKEN).build()
+    bot = application.bot
     
     # Register handlers
-    dispatcher.add_handler(PollAnswerHandler(handle_poll_answer))
+    application.add_handler(PollAnswerHandler(handle_poll_answer))
+    
+    # Set webhook
+    await bot.set_webhook(url=os.getenv("WEBHOOK_URL"))
     
     # Load initial data
     load_questions()
@@ -124,4 +126,11 @@ if __name__ == '__main__':
     Thread(target=schedule_tasks, daemon=True).start()
     
     # Start web server
-    run_server()
+    Thread(target=run_server, daemon=True).start()
+    
+    # Run application
+    await application.run_polling()
+
+if __name__ == '__main__':
+    import asyncio
+    asyncio.run(main())
