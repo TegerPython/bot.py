@@ -178,20 +178,23 @@ class QuizBot:
     async def setup_schedule(self):
         """Configure daily schedule"""
         job_queue = self.app.job_queue
-        tz = timezone(timedelta(hours=3))  # Adjust to your timezone
+        tz = timezone(timedelta(hours=3))  # UTC+3 timezone
 
-        # Question times: 8 AM, 12 PM, 6 PM
-        for hour in [8, 12, 18]:
+        # Define schedule
+        schedule = [
+            (self.post_question, time(8, 0, tzinfo=tz)),   # 8 AM
+            (self.post_question, time(12, 0, tzinfo=tz)),  # 12 PM
+            (self.post_question, time(18, 0, tzinfo=tz)),  # 6 PM
+            (self.show_leaderboard, time(19, 0, tzinfo=tz))  # 7 PM
+        ]
+
+        # Add jobs to queue
+        for job, time_spec in schedule:
             job_queue.run_daily(
-                self.post_question,
-                time=time(hour, 0, tzinfo=tz),
-                days=tuple(range(7))
-            
-        # Leaderboard time: 7 PM
-        job_queue.run_daily(
-            self.show_leaderboard,
-            time=time(19, 0, tzinfo=tz),
-            days=tuple(range(7)))
+                callback=job,
+                time=time_spec,
+                days=tuple(range(7))  # All days of week
+            )
 
     async def start_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Start command handler"""
@@ -200,8 +203,4 @@ class QuizBot:
     async def run(self):
         """Start the application"""
         await self.initialize()
-        await self.app.run_polling()
-
-if __name__ == "__main__":
-    bot = QuizBot()
-    asyncio.run(bot.run())
+        await self.app.run_poll
