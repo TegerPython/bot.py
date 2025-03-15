@@ -2,7 +2,8 @@ import os
 import json
 import logging
 import asyncio
-from datetime import time, timedelta
+import base64
+from datetime import time, timedelta, timezone
 from telegram import Bot, Update, Poll
 from telegram.ext import (
     Application,
@@ -10,6 +11,7 @@ from telegram.ext import (
     PollAnswerHandler,
     ContextTypes
 )
+import httpx
 
 # Configure logging
 logging.basicConfig(
