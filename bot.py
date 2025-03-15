@@ -149,13 +149,14 @@ def setup_jobs(app):
             send_question,
             time=time,
             days=tuple(range(7))
+        )
     
     # Schedule leaderboard
     app.job_queue.run_daily(
         post_leaderboard,
         time=leaderboard_time,
         days=tuple(range(7))
-)
+    )
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot operational")
