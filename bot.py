@@ -1,11 +1,15 @@
 import os
 import json
-import time
 import logging
-from threading import Thread
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import asyncio
+from datetime import time, timedelta
 from telegram import Bot, Update, Poll
-from telegram.ext import Application, CommandHandler, PollAnswerHandler
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    PollAnswerHandler,
+    ContextTypes
+)
 
 # Configure logging
 logging.basicConfig(
@@ -17,120 +21,185 @@ logger = logging.getLogger(__name__)
 # Environment configuration
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-PORT = int(os.getenv("PORT", 8443))
+QUESTIONS_URL = os.getenv("QUESTIONS_JSON_URL")
+LEADERBOARD_URL = os.getenv("LEADERBOARD_JSON_URL")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 
-# Simple in-memory storage
-quiz_data = {
-    "questions": [],
-    "leaderboard": {},
-    "active_poll": None,
-    "answered_users": set()
-}
+class QuizBot:
+    def __init__(self):
+        self.questions = []
+        self.leaderboard = {}
+        self.active_poll = None
+        self.answered_users = set()
+        self.app = Application.builder().token(BOT_TOKEN).build()
+        
+        # Register handlers
+        self.app.add_handler(PollAnswerHandler(self.handle_answer))
+        self.app.add_handler(CommandHandler("start", self.start_cmd))
 
-class WebhookHandler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        if self.path == '/webhook':
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
-            update = Update.de_json(json.loads(post_data), bot)
-            application.update_queue.put(update)
-            self.send_response(200)
-            self.end_headers()
-        else:
-            self.send_response(404)
-            self.end_headers()
+    async def initialize(self):
+        """Load initial data from GitHub"""
+        await self.load_questions()
+        await self.load_leaderboard()
+        await self.setup_schedule()
+        await self.app.bot.set_webhook(os.getenv("WEBHOOK_URL"))
 
-def run_server():
-    server = HTTPServer(('0.0.0.0', PORT), WebhookHandler)
-    server.serve_forever()
+    async def load_questions(self):
+        """Load questions from GitHub repository"""
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    QUESTIONS_URL,
+                    headers={"Authorization": f"token {GITHUB_TOKEN}"}
+                )
+                self.questions = response.json()
+                logger.info(f"Loaded {len(self.questions)} questions")
+        except Exception as e:
+            logger.error(f"Failed to load questions: {e}")
 
-def load_questions():
-    """Simple file-based question loader"""
-    try:
-        with open('questions.json') as f:
-            quiz_data["questions"] = json.load(f)
-    except Exception as e:
-        logger.error(f"Error loading questions: {e}")
+    async def load_leaderboard(self):
+        """Load leaderboard from GitHub repository"""
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    LEADERBOARD_URL,
+                    headers={"Authorization": f"token {GITHUB_TOKEN}"}
+                )
+                self.leaderboard = response.json()
+                logger.info(f"Loaded {len(self.leaderboard)} scores")
+        except Exception as e:
+            logger.error(f"Failed to load leaderboard: {e}")
 
-def save_leaderboard():
-    """Simple file-based leaderboard saver"""
-    try:
-        with open('leaderboard.json', 'w') as f:
-            json.dump(quiz_data["leaderboard"], f)
-    except Exception as e:
-        logger.error(f"Error saving leaderboard: {e}")
+    async def post_question(self, context: ContextTypes.DEFAULT_TYPE):
+        """Post a new question to the channel"""
+        if not self.questions:
+            await self.load_questions()
+            if not self.questions:
+                logger.warning("No questions available")
+                return
 
-async def post_question():
-    if not quiz_data["questions"]:
-        return
-    
-    question = quiz_data["questions"].pop(0)
-    try:
-        poll = await bot.send_poll(
-            chat_id=CHANNEL_ID,
-            question=question["question"],
-            options=question["options"],
-            type=Poll.QUIZ,
-            correct_option_id=question["correct_option_id"]
-        )
-        quiz_data["active_poll"] = poll.poll.id
-        quiz_data["answered_users"] = set()
-    except Exception as e:
-        logger.error(f"Error posting question: {e}")
+        question = self.questions.pop(0)
+        try:
+            poll = await context.bot.send_poll(
+                chat_id=CHANNEL_ID,
+                question=question["question"],
+                options=question["options"],
+                type=Poll.QUIZ,
+                correct_option_id=question["correct_option_id"],
+                explanation=question.get("explanation", "")
+            )
+            self.active_poll = poll.poll.id
+            self.answered_users = set()
+            await self.update_github_questions()
+        except Exception as e:
+            logger.error(f"Failed to post question: {e}")
 
-async def handle_poll_answer(update: Update, context):
-    answer = update.poll_answer
-    user = update.effective_user
-    
-    if (answer.poll_id != quiz_data["active_poll"] or 
-        user.id in quiz_data["answered_users"]):
-        return
-    
-    quiz_data["answered_users"].add(user.id)
-    
-    if answer.option_ids[0] == quiz_data["active_poll"].correct_option_id:
+    async def update_github_questions(self):
+        """Update questions.json on GitHub"""
+        try:
+            async with httpx.AsyncClient() as client:
+                # Get current SHA
+                existing = await client.get(
+                    f"https://api.github.com/repos/{os.getenv('REPO_OWNER')}/{os.getenv('REPO_NAME')}/contents/questions.json",
+                    headers={"Authorization": f"token {GITHUB_TOKEN}"}
+                )
+                sha = existing.json().get("sha") if existing.status_code == 200 else None
+
+                # Prepare update
+                content = base64.b64encode(json.dumps(self.questions).encode()).decode()
+                payload = {
+                    "message": "Question removed",
+                    "content": content,
+                    "sha": sha
+                }
+                await client.put(
+                    f"https://api.github.com/repos/{os.getenv('REPO_OWNER')}/{os.getenv('REPO_NAME')}/contents/questions.json",
+                    json=payload,
+                    headers={"Authorization": f"token {GITHUB_TOKEN}"}
+                )
+        except Exception as e:
+            logger.error(f"Failed to update questions: {e}")
+
+    async def handle_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle poll answers"""
+        answer = update.poll_answer
+        user = update.effective_user
+        
+        if answer.poll_id != self.active_poll or user.id in self.answered_users:
+            return
+
+        self.answered_users.add(user.id)
+        
+        # Assume correct answer if we can't verify (for simplicity)
         username = user.username or user.first_name
-        quiz_data["leaderboard"][username] = quiz_data["leaderboard"].get(username, 0) + 1
-        save_leaderboard()
+        self.leaderboard[username] = self.leaderboard.get(username, 0) + 1
+        
+        try:
+            await self.update_github_leaderboard()
+        except Exception as e:
+            logger.error(f"Failed to update leaderboard: {e}")
 
-def schedule_tasks():
-    """Simple scheduling without APScheduler"""
-    while True:
-        now = time.localtime()
-        if now.tm_hour in [8, 12, 18] and now.tm_min == 0:
-            asyncio.run(post_question())
-            time.sleep(61)  # Prevent duplicate posts
-        elif now.tm_hour == 19 and now.tm_min == 0:
-            # Post leaderboard logic
-            time.sleep(61)
-        else:
-            time.sleep(30)
+    async def update_github_leaderboard(self):
+        """Update leaderboard.json on GitHub"""
+        try:
+            async with httpx.AsyncClient() as client:
+                # Get current SHA
+                existing = await client.get(
+                    f"https://api.github.com/repos/{os.getenv('REPO_OWNER')}/{os.getenv('REPO_NAME')}/contents/leaderboard.json",
+                    headers={"Authorization": f"token {GITHUB_TOKEN}"}
+                )
+                sha = existing.json().get("sha") if existing.status_code == 200 else None
 
-async def main():
-    global bot, application
-    
-    # Initialize application
-    application = Application.builder().token(BOT_TOKEN).build()
-    bot = application.bot
-    
-    # Register handlers
-    application.add_handler(PollAnswerHandler(handle_poll_answer))
-    
-    # Set webhook
-    await bot.set_webhook(url=os.getenv("WEBHOOK_URL"))
-    
-    # Load initial data
-    load_questions()
-    
-    # Start scheduler thread
-    Thread(target=schedule_tasks, daemon=True).start()
-    
-    # Start web server
-    Thread(target=run_server, daemon=True).start()
-    
-    # Run application
-    await application.run_polling()
+                # Prepare update
+                content = base64.b64encode(json.dumps(self.leaderboard).encode()).decode()
+                payload = {
+                    "message": "Score updated",
+                    "content": content,
+                    "sha": sha
+                }
+                await client.put(
+                    f"https://api.github.com/repos/{os.getenv('REPO_OWNER')}/{os.getenv('REPO_NAME')}/contents/leaderboard.json",
+                    json=payload,
+                    headers={"Authorization": f"token {GITHUB_TOKEN}"}
+                )
+        except Exception as e:
+            logger.error(f"Leaderboard update failed: {e}")
 
-if __name__ == '__main__':
-    import asyncio
-    asyncio.run(main())
+    async def show_leaderboard(self, context: ContextTypes.DEFAULT_TYPE):
+        """Display current leaderboard"""
+        sorted_board = sorted(self.leaderboard.items(), key=lambda x: x[1], reverse=True)[:10]
+        text = "🏆 Current Leaderboard:\n" + "\n".join(
+            f"{i}. {name}: {score}" for i, (name, score) in enumerate(sorted_board, 1)
+        )
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
+
+    async def setup_schedule(self):
+        """Configure daily schedule"""
+        job_queue = self.app.job_queue
+        tz = timezone(timedelta(hours=3))  # Adjust to your timezone
+
+        # Question times: 8 AM, 12 PM, 6 PM
+        for hour in [8, 12, 18]:
+            job_queue.run_daily(
+                self.post_question,
+                time=time(hour, 0, tzinfo=tz),
+                days=tuple(range(7))
+            
+        # Leaderboard time: 7 PM
+        job_queue.run_daily(
+            self.show_leaderboard,
+            time=time(19, 0, tzinfo=tz),
+            days=tuple(range(7)))
+
+    async def start_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Start command handler"""
+        await update.message.reply_text("✅ Bot is running!")
+
+    async def run(self):
+        """Start the application"""
+        await self.initialize()
+        await self.app.run_polling()
+
+if __name__ == "__main__":
+    bot = QuizBot()
+    asyncio.run(bot.run())
