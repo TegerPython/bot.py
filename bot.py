@@ -176,7 +176,7 @@ class QuizBot:
                 correct_option_id=question["correct_option_id"],
                 explanation=question.get("explanation", "")
             )
-            if update.effective_chat.id != CHANNEL_ID:
+           if update.effective_chat.id != CHANNEL_ID:
                 await update.message.reply_text(f"✅ Test question sent to channel: {poll.link}")
 
             self.active_poll = poll.poll.id
@@ -227,8 +227,7 @@ class QuizBot:
         import telegram
         print(f"Telegram Bot Version: {telegram.__version__}")
         logger.info(f"Telegram Bot Version: {telegram.__version__}")
-        await self.app.start_polling()
-        await asyncio.Event().wait()
+        await self.app.run_polling()
 
 if __name__ == "__main__":
     bot = QuizBot()
