@@ -14,6 +14,7 @@ from telegram.ext import (
 )
 import httpx
 import base64
+import random
 
 # Logging setup
 logging.basicConfig(
@@ -52,7 +53,20 @@ class QuizBot:
         await self.setup_schedule()
         await self.app.bot.set_webhook(WEBHOOK_URL)
 
-    # GitHub integration (preserved from previous working version)
+    async def load_leaderboard(self):
+        """Load leaderboard from GitHub"""
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    LEADERBOARD_URL,
+                    headers={"Authorization": f"token {GITHUB_TOKEN}"}
+                )
+                self.leaderboard = response.json()
+                logger.info(f"Loaded leaderboard with {len(self.leaderboard)} entries")
+        except Exception as e:
+            logger.error(f"Failed to load leaderboard: {e}")
+            self.leaderboard = {}
+
     async def fetch_questions(self):
         """Fetch questions from GitHub"""
         try:
@@ -86,7 +100,6 @@ class QuizBot:
         except Exception as e:
             logger.error(f"Leaderboard update failed: {e}")
 
-    # Core functionality from previous version
     async def post_question(self, context: ContextTypes.DEFAULT_TYPE):
         """Post a question to the channel"""
         try:
@@ -110,7 +123,6 @@ class QuizBot:
         except Exception as e:
             logger.error(f"Failed to post question: {e}")
 
-    # Heartbeat system from previous version
     async def heartbeat(self, context: ContextTypes.DEFAULT_TYPE):
         """Send regular status updates"""
         now = datetime.now(GAZA_TZ).strftime("%Y-%m-%d %H:%M:%S")
@@ -121,7 +133,6 @@ class QuizBot:
                  f"Leaderboard entries: {len(self.leaderboard)}"
         )
 
-    # Improved scheduling system
     def get_utc_time(self, hour, minute):
         local_time = GAZA_TZ.localize(datetime.now().replace(hour=hour, minute=minute))
         return local_time.astimezone(pytz.utc).time()
@@ -148,7 +159,6 @@ class QuizBot:
         # 1-minute heartbeat
         job_queue.run_repeating(self.heartbeat, interval=60)
 
-    # Command handlers
     async def test_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Owner-only test command"""
         if update.effective_user.id != OWNER_ID:
@@ -191,7 +201,6 @@ class QuizBot:
         )
         await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
 
-    # Answer handling (preserved from previous version)
     async def handle_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         answer = update.poll_answer
         user = update.effective_user
