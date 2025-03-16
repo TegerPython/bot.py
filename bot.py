@@ -1,4 +1,4 @@
-# Part 1 of 2 (approximately 50% of the characters)
+# Part 1 of 2
 import os
 import json
 import logging
@@ -11,7 +11,8 @@ from telegram.ext import (
     CommandHandler,
     PollAnswerHandler,
     ContextTypes,
-    JobQueue
+    JobQueue,
+    Defaults
 )
 import httpx
 import base64
@@ -31,7 +32,7 @@ QUESTIONS_URL = os.getenv("QUESTIONS_JSON_URL")
 LEADERBOARD_URL = os.getenv("LEADERBOARD_JSON_URL")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+#WEBHOOK_URL = os.getenv("WEBHOOK_URL") # Not used for long polling
 
 # Timezone configuration
 GAZA_TZ = pytz.timezone("Asia/Gaza")
@@ -41,8 +42,9 @@ class QuizBot:
         self.leaderboard = {}
         self.active_poll = None
         self.answered_users = set()
-        self.app = Application.builder().token(BOT_TOKEN).build()
-        
+        defaults = Defaults(tzinfo=GAZA_TZ)
+        self.app = Application.builder().token(BOT_TOKEN).defaults(defaults).build()
+
         # Register handlers
         self.app.add_handler(PollAnswerHandler(self.handle_answer))
         self.app.add_handler(CommandHandler("test", self.test_cmd))
@@ -52,7 +54,7 @@ class QuizBot:
         """Initialize the bot"""
         await self.load_leaderboard()
         await self.setup_schedule()
-        await self.app.bot.set_webhook(WEBHOOK_URL)
+        #await self.app.bot.set_webhook(WEBHOOK_URL) # Not used for long polling
 
     async def load_leaderboard(self):
         """Load leaderboard from GitHub"""
@@ -109,7 +111,7 @@ class QuizBot:
                 logger.warning("No questions available")
                 return
 
-            question = questions[datetime.now().day % len(questions)]
+            question = random.choice(questions)
             poll = await context.bot.send_poll(
                 chat_id=CHANNEL_ID,
                 question=question["question"],
@@ -118,7 +120,7 @@ class QuizBot:
                 correct_option_id=question["correct_option_id"],
                 explanation=question.get("explanation", "")
             )
-            
+
             self.active_poll = poll.poll.id
             self.answered_users = set()
         except Exception as e:
@@ -141,25 +143,23 @@ class QuizBot:
     async def setup_schedule(self):
         """Configure daily schedule"""
         job_queue = self.app.job_queue
-        
+
         # Three daily questions
-        for t in [(8,0), (12,0), (18,0)]:
+        for t in [(8, 0), (12, 0), (18, 0)]:
             job_queue.run_daily(
                 self.post_question,
                 time=self.get_utc_time(*t),
                 days=tuple(range(7))
             )
-        
+
         # Daily leaderboard
         job_queue.run_daily(
             self.show_leaderboard,
-            time=self.get_utc_time(19,0),
+            time=self.get_utc_time(19, 0),
             days=tuple(range(7))
         )
-        
-        # 1-minute heartbeat
-        job_queue.run_repeating(self.heartbeat, interval=60)
-# Part 2 of 2 (approximately 50% of the characters)
+
+       # Part 2 of 2
         
         # 1-minute heartbeat
         job_queue.run_repeating(self.heartbeat, interval=60)
@@ -169,7 +169,7 @@ class QuizBot:
         if update.effective_user.id != OWNER_ID:
             await update.message.reply_text("🚫 Unauthorized")
             return
-            
+
         try:
             questions = await self.fetch_questions()
             if not questions:
@@ -209,14 +209,14 @@ class QuizBot:
     async def handle_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         answer = update.poll_answer
         user = update.effective_user
-        
+
         if answer.poll_id != self.active_poll or user.id in self.answered_users:
             return
 
         self.answered_users.add(user.id)
         username = user.username or user.first_name
         self.leaderboard[username] = self.leaderboard.get(username, 0) + 1
-        
+
         try:
             await self.update_github_leaderboard()
         except Exception as e:
@@ -226,7 +226,7 @@ class QuizBot:
         """Start the application"""
         await self.initialize()
         await self.app.initialize()
-        await self.app.start()
+        await self.app.start_polling() # Use long polling
         await asyncio.Event().wait()
 
 if __name__ == "__main__":
