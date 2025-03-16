@@ -157,7 +157,6 @@ class QuizBot:
             days=tuple(range(7))
         )
 
-        # Part 2 of 2
         # 1-minute heartbeat
         job_queue.run_repeating(self.heartbeat, interval=60)
 
