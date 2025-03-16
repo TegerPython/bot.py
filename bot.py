@@ -210,4 +210,25 @@ class QuizBot:
         answer = update.poll_answer
         user = update.effective_user
 
-        if
+        if answer.poll_id != self.active_poll or user.id in self.answered_users:
+            return
+
+        self.answered_users.add(user.id)
+        username = user.username or user.first_name
+        self.leaderboard[username] = self.leaderboard.get(username, 0) + 1
+
+        try:
+            await self.update_github_leaderboard()
+        except Exception as e:
+            logger.error(f"Leaderboard update failed: {e}")
+
+    async def run(self):
+        """Start the application"""
+        await self.initialize()
+        await self.app.initialize()
+        await self.app.start_polling() # Use long polling
+        await asyncio.Event().wait()
+
+if __name__ == "__main__":
+    bot = QuizBot()
+    asyncio.run(bot.run())
