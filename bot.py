@@ -1,4 +1,3 @@
-# Part 1 of 2
 import os
 import json
 import logging
@@ -147,14 +146,14 @@ class QuizBot:
             job_queue.run_daily(
                 self.post_question,
                 time=self.get_utc_time(*t),
-                days=tuple(range(7))
+                days=tuple(range(7))  # 0-6, Monday-Sunday
             )
 
         # Daily leaderboard
         job_queue.run_daily(
             self.show_leaderboard,
             time=self.get_utc_time(19, 0),
-            days=tuple(range(7))
+            days=tuple(range(7))  # 0-6, Monday-Sunday
         )
 
         # 1-minute heartbeat
@@ -225,7 +224,10 @@ class QuizBot:
         """Start the application"""
         await self.initialize()
         await self.app.initialize()
-        await self.app.start_polling() # Use long polling
+        import telegram
+        print(f"Telegram Bot Version: {telegram.__version__}")
+        logger.info(f"Telegram Bot Version: {telegram.__version__}")
+        await self.app.start_polling()
         await asyncio.Event().wait()
 
 if __name__ == "__main__":
