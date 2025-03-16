@@ -157,5 +157,57 @@ class QuizBot:
             days=tuple(range(7))
         )
 
+        # Part 2 of 2
         # 1-minute heartbeat
         job_queue.run_repeating(self.heartbeat, interval=60)
+
+    async def test_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Post a test question to the channel"""
+        try:
+            questions = await self.fetch_questions()
+            if not questions:
+                await update.message.reply_text("❌ No questions available")
+                return
+
+            question = random.choice(questions)
+            poll = await context.bot.send_poll(
+                chat_id=CHANNEL_ID,
+                question=question["question"],
+                options=question["options"],
+                type=Poll.QUIZ,
+                correct_option_id=question["correct_option_id"],
+                explanation=question.get("explanation", "")
+            )
+            if update.effective_chat.id != CHANNEL_ID:
+                await update.message.reply_text(f"✅ Test question sent to channel: {poll.link}")
+
+            self.active_poll = poll.poll.id
+            self.answered_users = set()
+        except Exception as e:
+            logger.error(f"Test failed: {e}")
+            await update.message.reply_text(f"❌ Test failed: {str(e)}")
+
+    async def leaderboard_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show leaderboard in the channel or DM"""
+        sorted_board = sorted(self.leaderboard.items(), key=lambda x: x[1], reverse=True)
+        text = "🏆 Leaderboard:\n" + "\n".join(
+            f"{i}. {name}: {score}" for i, (name, score) in enumerate(sorted_board, 1)
+        )
+        if update.effective_chat.id != CHANNEL_ID:
+            await update.message.reply_text(text)
+        else:
+            await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
+
+    async def show_leaderboard(self, context: ContextTypes.DEFAULT_TYPE):
+        """Post daily leaderboard to channel"""
+        sorted_board = sorted(self.leaderboard.items(), key=lambda x: x[1], reverse=True)
+        text = "🏆 Daily Leaderboard:\n" + "\n".join(
+            f"{i}. {name}: {score}" for i, (name, score) in enumerate(sorted_board, 1)
+        )
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
+
+    async def handle_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        answer = update.poll_answer
+        user = update.effective_user
+
+        if
