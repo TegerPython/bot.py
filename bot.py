@@ -1,3 +1,4 @@
+# Part 1 of 2 (approximately 50% of the characters)
 import os
 import json
 import logging
@@ -158,6 +159,10 @@ class QuizBot:
         
         # 1-minute heartbeat
         job_queue.run_repeating(self.heartbeat, interval=60)
+# Part 2 of 2 (approximately 50% of the characters)
+        
+        # 1-minute heartbeat
+        job_queue.run_repeating(self.heartbeat, interval=60)
 
     async def test_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Owner-only test command"""
@@ -220,6 +225,7 @@ class QuizBot:
     async def run(self):
         """Start the application"""
         await self.initialize()
+        await self.app.initialize()
         await self.app.start()
         await asyncio.Event().wait()
 
