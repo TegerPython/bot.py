@@ -32,7 +32,6 @@ PORT = int(os.getenv("PORT", 8443))
 
 class QuizBot:
     def __init__(self):
-        self.questions = []
         self.leaderboard = {}
         self.active_poll = None
         self.answered_users = set()
@@ -44,48 +43,38 @@ class QuizBot:
         self.app.add_handler(CommandHandler("test", self.test_cmd))
 
     async def initialize(self):
-        """Load initial data from GitHub"""
-        await self.load_questions()
+        """Initialize the bot"""
         await self.load_leaderboard()
         await self.setup_schedule()
         await self.app.bot.set_webhook(os.getenv("WEBHOOK_URL"))
 
-    async def load_questions(self):
-        """Load questions from GitHub repository"""
+    async def fetch_questions(self):
+        """Fetch questions from GitHub"""
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
                     QUESTIONS_URL,
                     headers={"Authorization": f"token {GITHUB_TOKEN}"}
                 )
-                self.questions = response.json()
-                logger.info(f"Loaded {len(self.questions)} questions")
+                return response.json()
         except Exception as e:
-            logger.error(f"Failed to load questions: {e}")
-
-    async def load_leaderboard(self):
-        """Load leaderboard from GitHub repository"""
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    LEADERBOARD_URL,
-                    headers={"Authorization": f"token {GITHUB_TOKEN}"}
-                )
-                self.leaderboard = response.json()
-                logger.info(f"Loaded {len(self.leaderboard)} scores")
-        except Exception as e:
-            logger.error(f"Failed to load leaderboard: {e}")
+            logger.error(f"Failed to fetch questions: {e}")
+            return []
 
     async def post_question(self, context: ContextTypes.DEFAULT_TYPE):
-        """Post a new question to the channel"""
-        if not self.questions:
-            await self.load_questions()
-            if not self.questions:
+        """Post a question to the channel"""
+        try:
+            # Fetch questions
+            questions = await self.fetch_questions()
+            if not questions:
                 logger.warning("No questions available")
                 return
 
-        question = self.questions.pop(0)
-        try:
+            # Get the first question
+            question = questions[0]
+            logger.info(f"Posting question: {question['question']}")
+
+            # Send the poll
             poll = await context.bot.send_poll(
                 chat_id=CHANNEL_ID,
                 question=question["question"],
@@ -94,37 +83,13 @@ class QuizBot:
                 correct_option_id=question["correct_option_id"],
                 explanation=question.get("explanation", "")
             )
+            
+            # Update state
             self.active_poll = poll.poll.id
             self.answered_users = set()
-            await self.update_github_questions()
+            logger.info(f"Poll posted: {poll.poll.id}")
         except Exception as e:
             logger.error(f"Failed to post question: {e}")
-
-    async def update_github_questions(self):
-        """Update questions.json on GitHub"""
-        try:
-            async with httpx.AsyncClient() as client:
-                # Get current SHA
-                existing = await client.get(
-                    f"https://api.github.com/repos/{os.getenv('REPO_OWNER')}/{os.getenv('REPO_NAME')}/contents/questions.json",
-                    headers={"Authorization": f"token {GITHUB_TOKEN}"}
-                )
-                sha = existing.json().get("sha") if existing.status_code == 200 else None
-
-                # Prepare update
-                content = base64.b64encode(json.dumps(self.questions).encode()).decode()
-                payload = {
-                    "message": "Question removed",
-                    "content": content,
-                    "sha": sha
-                }
-                await client.put(
-                    f"https://api.github.com/repos/{os.getenv('REPO_OWNER')}/{os.getenv('REPO_NAME')}/contents/questions.json",
-                    json=payload,
-                    headers={"Authorization": f"token {GITHUB_TOKEN}"}
-                )
-        except Exception as e:
-            logger.error(f"Failed to update questions: {e}")
 
     async def handle_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle poll answers"""
@@ -216,51 +181,12 @@ class QuizBot:
             return
 
         try:
-            # Step 1: Verify bot can post in channel
-            try:
-                await context.bot.send_message(
-                    chat_id=CHANNEL_ID,
-                    text="🔍 Testing bot permissions..."
-                )
-            except Exception as e:
-                await update.message.reply_text(
-                    f"❌ Bot cannot post in channel: {str(e)}\n"
-                    f"Ensure the bot is an admin with 'Post Messages' permission."
-                )
-                return
-
-            # Step 2: Load questions if not already loaded
-            if not self.questions:
-                await self.load_questions()
-                if not self.questions:
-                    await update.message.reply_text("❌ No questions available")
-                    return
-
-            # Step 3: Post the first question (without removing it)
-            question = self.questions[0]
-            try:
-                poll = await context.bot.send_poll(
-                    chat_id=CHANNEL_ID,
-                    question=question["question"],
-                    options=question["options"],
-                    type=Poll.QUIZ,
-                    correct_option_id=question["correct_option_id"],
-                    explanation=question.get("explanation", "")
-                )
-                
-                # Step 4: Confirm success
-                await update.message.reply_text(
-                    f"✅ Test question sent!\n"
-                    f"Preview: {poll.link}"
-                )
-            except Exception as e:
-                await update.message.reply_text(
-                    f"❌ Failed to send poll: {str(e)}\n"
-                    f"Ensure the bot has 'Send Polls' permission."
-                )
+            # Post a test question
+            await self.post_question(context)
+            await update.message.reply_text("✅ Test question sent!")
         except Exception as e:
             logger.error(f"Test command failed: {e}")
-            await update.message.reply_text(f"❌ Unexpected error: {str(e)}")
+            await update.message.reply_text(f"❌ Test failed: {str(e)}")
 
     async def webhook_handler(self, request):
         """Handle incoming webhook requests"""
