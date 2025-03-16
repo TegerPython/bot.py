@@ -216,37 +216,51 @@ class QuizBot:
             return
 
         try:
-            # Preserve original questions list
-            original_questions = self.questions.copy()
-            
-            # Force reload latest questions
-            await self.load_questions()
-            
-            if not self.questions:
-                await update.message.reply_text("❌ No questions available")
+            # Step 1: Verify bot can post in channel
+            try:
+                await context.bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text="🔍 Testing bot permissions..."
+                )
+            except Exception as e:
+                await update.message.reply_text(
+                    f"❌ Bot cannot post in channel: {str(e)}\n"
+                    f"Ensure the bot is an admin with 'Post Messages' permission."
+                )
                 return
+
+            # Step 2: Load questions if not already loaded
+            if not self.questions:
+                await self.load_questions()
+                if not self.questions:
+                    await update.message.reply_text("❌ No questions available")
+                    return
+
+            # Step 3: Post the first question (without removing it)
+            question = self.questions[0]
+            try:
+                poll = await context.bot.send_poll(
+                    chat_id=CHANNEL_ID,
+                    question=question["question"],
+                    options=question["options"],
+                    type=Poll.QUIZ,
+                    correct_option_id=question["correct_option_id"],
+                    explanation=question.get("explanation", "")
+                )
                 
-            # Send test question
-            question = self.questions[0]  # Don't remove from list for testing
-            poll = await context.bot.send_poll(
-                chat_id=CHANNEL_ID,
-                question=question["question"],
-                options=question["options"],
-                type=Poll.QUIZ,
-                correct_option_id=question["correct_option_id"],
-                explanation=question.get("explanation", "")
-            )
-            
-            # Restore original questions
-            self.questions = original_questions
-            
-            await update.message.reply_text(
-                f"✅ Test question sent!\n"
-                f"Preview: {poll.link}"
-            )
+                # Step 4: Confirm success
+                await update.message.reply_text(
+                    f"✅ Test question sent!\n"
+                    f"Preview: {poll.link}"
+                )
+            except Exception as e:
+                await update.message.reply_text(
+                    f"❌ Failed to send poll: {str(e)}\n"
+                    f"Ensure the bot has 'Send Polls' permission."
+                )
         except Exception as e:
-            logger.error(f"Test failed: {e}")
-            await update.message.reply_text(f"❌ Test failed: {str(e)}")
+            logger.error(f"Test command failed: {e}")
+            await update.message.reply_text(f"❌ Unexpected error: {str(e)}")
 
     async def webhook_handler(self, request):
         """Handle incoming webhook requests"""
