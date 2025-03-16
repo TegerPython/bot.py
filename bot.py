@@ -32,7 +32,6 @@ QUESTIONS_URL = os.getenv("QUESTIONS_JSON_URL")
 LEADERBOARD_URL = os.getenv("LEADERBOARD_JSON_URL")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
-#WEBHOOK_URL = os.getenv("WEBHOOK_URL") # Not used for long polling
 
 # Timezone configuration
 GAZA_TZ = pytz.timezone("Asia/Gaza")
@@ -48,13 +47,12 @@ class QuizBot:
         # Register handlers
         self.app.add_handler(PollAnswerHandler(self.handle_answer))
         self.app.add_handler(CommandHandler("test", self.test_cmd))
-        self.app.add_handler(CommandHandler("leaderboard", self.show_leaderboard_cmd))
+        self.app.add_handler(CommandHandler("leaderboard", self.leaderboard_cmd))
 
     async def initialize(self):
         """Initialize the bot"""
         await self.load_leaderboard()
         await self.setup_schedule()
-        #await self.app.bot.set_webhook(WEBHOOK_URL) # Not used for long polling
 
     async def load_leaderboard(self):
         """Load leaderboard from GitHub"""
@@ -159,76 +157,5 @@ class QuizBot:
             days=tuple(range(7))
         )
 
-       # Part 2 of 2
-        
         # 1-minute heartbeat
         job_queue.run_repeating(self.heartbeat, interval=60)
-
-    async def test_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Owner-only test command"""
-        if update.effective_user.id != OWNER_ID:
-            await update.message.reply_text("🚫 Unauthorized")
-            return
-
-        try:
-            questions = await self.fetch_questions()
-            if not questions:
-                await update.message.reply_text("❌ No questions available")
-                return
-
-            question = random.choice(questions)
-            poll = await context.bot.send_poll(
-                chat_id=CHANNEL_ID,
-                question=question["question"],
-                options=question["options"],
-                type=Poll.QUIZ,
-                correct_option_id=question["correct_option_id"],
-                explanation=question.get("explanation", "")
-            )
-            await update.message.reply_text(f"✅ Test question sent: {poll.link}")
-        except Exception as e:
-            logger.error(f"Test failed: {e}")
-            await update.message.reply_text(f"❌ Test failed: {str(e)}")
-
-    async def show_leaderboard_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show leaderboard in private chat"""
-        sorted_board = sorted(self.leaderboard.items(), key=lambda x: x[1], reverse=True)
-        text = "🏆 Current Leaderboard:\n" + "\n".join(
-            f"{i}. {name}: {score}" for i, (name, score) in enumerate(sorted_board, 1)
-        )
-        await update.message.reply_text(text)
-
-    async def show_leaderboard(self, context: ContextTypes.DEFAULT_TYPE):
-        """Post daily leaderboard to channel"""
-        sorted_board = sorted(self.leaderboard.items(), key=lambda x: x[1], reverse=True)
-        text = "🏆 Daily Leaderboard:\n" + "\n".join(
-            f"{i}. {name}: {score}" for i, (name, score) in enumerate(sorted_board, 1)
-        )
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
-
-    async def handle_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        answer = update.poll_answer
-        user = update.effective_user
-
-        if answer.poll_id != self.active_poll or user.id in self.answered_users:
-            return
-
-        self.answered_users.add(user.id)
-        username = user.username or user.first_name
-        self.leaderboard[username] = self.leaderboard.get(username, 0) + 1
-
-        try:
-            await self.update_github_leaderboard()
-        except Exception as e:
-            logger.error(f"Leaderboard update failed: {e}")
-
-    async def run(self):
-        """Start the application"""
-        await self.initialize()
-        await self.app.initialize()
-        await self.app.start_polling() # Use long polling
-        await asyncio.Event().wait()
-
-if __name__ == "__main__":
-    bot = QuizBot()
-    asyncio.run(bot.run())
