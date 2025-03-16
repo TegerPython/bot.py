@@ -176,7 +176,7 @@ class QuizBot:
                 correct_option_id=question["correct_option_id"],
                 explanation=question.get("explanation", "")
             )
-           if update.effective_chat.id != CHANNEL_ID:
+            if update.effective_chat.id != CHANNEL_ID:
                 await update.message.reply_text(f"✅ Test question sent to channel: {poll.link}")
 
             self.active_poll = poll.poll.id
