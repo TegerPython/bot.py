@@ -149,12 +149,12 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_answer))
 
     # Webhook configuration
+    port = int(os.getenv("PORT", 8443))
     application.run_webhook(
         listen="0.0.0.0",
-        port=int(os.getenv("PORT", 8443)),  # Use the correct port
+        port=port,
         url_path=BOT_TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}"
+        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
     )
-
 if __name__ == "__main__":
     main()
