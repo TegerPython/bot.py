@@ -8,7 +8,7 @@ from telegram import Update, Poll, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application,
     CommandHandler,
-    PollAnswerHandler,
+    CallbackQueryHandler,
     ContextTypes,
     JobQueue
 )
@@ -41,7 +41,7 @@ class QuizBot:
     def __init__(self):
         self.leaderboard = {}
         self.active_poll = None
-        self.answered_users = {}  # Changed to dict for message_id
+        self.answered_users = {}
         self.questions = []
         self.current_question_index = 0
         self.app = Application.builder().token(BOT_TOKEN).build()
@@ -49,7 +49,7 @@ class QuizBot:
         # Register handlers
         self.app.add_handler(CommandHandler("test", self.test_cmd))
         self.app.add_handler(CommandHandler("leaderboard", self.show_leaderboard_cmd))
-        self.app.add_handler(self.callback_query_handler)
+        self.app.add_handler(CallbackQueryHandler(self.callback_query_handler))
 
     async def initialize(self):
         """Initialize the bot"""
