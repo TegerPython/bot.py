@@ -153,13 +153,16 @@ async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
         text=f"💓 Bot status at {now}\nActive questions: {len(question_manager.active_questions)}"
     )
 
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Bot is running! Use /test to send a test question")
+
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
     # Clear existing jobs to avoid duplicates
     if application.job_queue:
-        application.job_queue.stop()
-        application.job_queue.scheduler.remove_all_jobs()
+        for job in application.job_queue.jobs():
+            application.job_queue.scheduler.remove_job(job.id)
 
     # Schedule daily questions
     tz = pytz.timezone("Asia/Gaza")
