@@ -60,7 +60,7 @@ class QuestionManager:
     def cleanup_old_questions(self):
         cutoff = datetime.now() - timedelta(minutes=30)
         to_remove = [msg_id for msg_id, q in self.active_questions.items() 
-                    if q["timestamp"] < cutoff]
+                     if q["timestamp"] < cutoff]
         for msg_id in to_remove:
             del self.active_questions[msg_id]
         return len(to_remove)
@@ -108,9 +108,16 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_answer == question_data["answer"]:
         response = "✅ Correct!"
     else:
-        response = (f"❌ Incorrect. Correct answer: {question_data['answer']}\n"
-                   f"📖 Explanation: {next(q.get('explanation', '') for q in QUESTIONS 
-                                   if q['question'] == question_data['question']}")
+        # Get explanation from original questions list
+        explanation = next(
+            (q.get("explanation", "") for q in QUESTIONS 
+             if q["question"] == question_data["question"]),
+            "No explanation available"
+        )
+        response = (
+            f"❌ Incorrect. Correct answer: {question_data['answer']}\n"
+            f"📖 Explanation: {explanation}"
+        )
 
     await query.edit_message_text(
         text=f"{query.message.text}\n\n{response}",
@@ -143,7 +150,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bot is running! Use /test to send a test question")
 
 def main():
-    application = Application.builder().token=BOT_TOKEN).build()
+    application = Application.builder().token(BOT_TOKEN).build()
 
     # Schedule daily questions
     tz = pytz.timezone("Asia/Gaza")
