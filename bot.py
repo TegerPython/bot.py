@@ -35,7 +35,7 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False, updat
     else:
         current_question = questions[datetime.now().day % len(questions)]
 
-    logger.info(f"Sending question: {current_question['question']} to chat ID: {CHANNEL_ID}") # Added log
+    logger.info(f"Sending question: {current_question['question']} to chat ID: {CHANNEL_ID}")
 
     keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in current_question["options"]]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -162,13 +162,6 @@ def main():
         url_path=BOT_TOKEN,
         webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
     )
-
-   def job_callback(context: ContextTypes.DEFAULT_TYPE):
-        logger.info(f"Job {context.job.name} called") # add log for job
-
-    job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"), callback=job_callback)
-    job_queue.run_daily(send_question, get_utc_time(11, 22, "Asia/Gaza"), name="second_question", callback=job_callback)
-    job_queue.run_daily(send_question, get_utc_time(18, 0, "Asia/Gaza"), callback=job_callback)
 
 if __name__ == "__main__":
     main()
