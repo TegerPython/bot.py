@@ -150,11 +150,12 @@ def main():
 
     # Webhook configuration
     application.run_webhook(
-        listen="0.0.0.0",
-        port=8000,
-        url_path=BOT_TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-    )
+    listen="0.0.0.0",
+    port=int(os.getenv("PORT", 8443)),  # Use the correct port
+    url_path=BOT_TOKEN,
+    webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+)
+
 
 if __name__ == "__main__":
     main()
