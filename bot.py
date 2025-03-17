@@ -40,17 +40,33 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False, updat
 
     try:
         message = await context.bot.send_message(
-            chat_id=CHANNEL_ID,
+            chat_id=update.effective_chat.id if update else CHANNEL_ID, #send to dm if update exists, else to channel
             text=f"📝 {'Test' if is_test else 'Daily'} Challenge:\n\n{current_question['question']}",
             reply_markup=reply_markup,
-            disable_web_page_preview=True,  # Prevent link previews
-            disable_notification=False,     # Enable notifications
+            disable_web_page_preview=True,
+            disable_notification=False,
         )
-        if message and message.message_id: #check if the message was sent and the message id exists
-            current_message_id = message.message_id
-            if update:
-                await update.message.reply_text("✅ Test question sent to channel.")
-            return True
+
+        if message and message.message_id:
+            if update and update.effective_chat.id != CHANNEL_ID: # only copy if sent from dm
+                copied_message = await context.bot.copy_message(
+                    chat_id=CHANNEL_ID,
+                    from_chat_id=update.effective_chat.id,
+                    message_id=message.message_id
+                )
+                if copied_message and copied_message.message_id:
+                    if update:
+                        await update.message.reply_text("✅ Test question sent to channel.")
+                    return True
+                else:
+                    if update:
+                        await update.message.reply_text("❌ Failed to send test question: Telegram API returned an empty copied message or no message ID.")
+                    return False
+            else:
+                current_message_id = message.message_id
+                if update:
+                    await update.message.reply_text("✅ Test question sent to channel.")
+                return True
         else:
             if update:
                 await update.message.reply_text("❌ Failed to send test question: Telegram API returned an empty message or no message ID.")
@@ -127,7 +143,7 @@ def main():
 
     # Use pytz conversion for Gaza timezone times
     job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
-    job_queue.run_daily(send_question, get_utc_time(11, 15, "Asia/Gaza"), name="second_question")
+    job_queue.run_daily(send_question, get_utc_time(11, 22, "Asia/Gaza"), name="second_question")
     job_queue.run_daily(send_question, get_utc_time(18, 0, "Asia/Gaza"))
 
     job_queue.run_repeating(heartbeat, interval=60)
