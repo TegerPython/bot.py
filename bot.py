@@ -149,7 +149,10 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_answer))
 
     # Webhook configuration
-    port = int(os.getenv("PORT", 8443))
+    print(f"Webhook URL: {WEBHOOK_URL}")  # Add this line
+    # load_leaderboard()
+    application = Application.builder().token(BOT_TOKEN).build()
+    # ... rest of your code ...
     application.run_webhook(
         listen="0.0.0.0",
         port=port,
