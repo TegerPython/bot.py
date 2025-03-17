@@ -1,7 +1,5 @@
 import os
-import json
 import logging
-import asyncio
 import random
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -18,40 +16,21 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
-# Leaderboard file
-LEADERBOARD_FILE = "leaderboard.json"
-
 # Questions
 questions = [
     {"question": "What is the capital of France?", "options": ["Berlin", "Madrid", "Paris", "Rome"], "answer": "Paris", "explanation": "Paris is the capital city of France."},
     {"question": "2 + 2 equals?", "options": ["3", "4", "5", "6"], "answer": "4", "explanation": "Simple math!"}
 ]
 
-leaderboard = {}
 answered_users = set()
 current_question = None
 current_message_id = None
 
-def load_leaderboard():
-    global leaderboard
-    if os.path.exists(LEADERBOARD_FILE):
-        with open(LEADERBOARD_FILE, "r") as file:
-            leaderboard = json.load(file)
-    else:
-        logger.warning("⚠️ No leaderboard file found, starting fresh.")
-        leaderboard = {}
-
-def save_leaderboard():
-    with open(LEADERBOARD_FILE, "w") as file:
-        json.dump(leaderboard, file, indent=2)
-
-async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False, custom_question=None) -> None:
+async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> None:
     global current_question, answered_users, current_message_id
     answered_users = set()
 
-    if custom_question:
-        current_question = custom_question
-    elif is_test:
+    if is_test:
         current_question = random.choice(questions)
     else:
         current_question = questions[datetime.now().day % len(questions)]
@@ -83,8 +62,6 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if correct:
         await query.answer("✅ Correct!")
-        leaderboard[username] = leaderboard.get(username, 0) + 1
-        save_leaderboard()
 
         explanation = current_question.get("explanation", "No explanation provided.")
         edited_text = (
@@ -92,7 +69,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"Question: {current_question['question']}\n"
             f"✅ Correct Answer: {current_question['answer']}\n"
             f"ℹ️ Explanation: {explanation}\n\n"
-            f"🏆 Winner: {username}: {leaderboard[username]} points"
+            f"🏆 Winner: {username}"
         )
         try:
             await context.bot.edit_message_text(
@@ -105,46 +82,16 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     else:
         await query.answer("❌ Incorrect.")
 
-async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
-    text = "🏆 Leaderboard:\n\n" + "\n".join([f"{name}: {points} points" for name, points in sorted_leaderboard])
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=text)
-
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
-
-async def send_daily_leaderboard(context: ContextTypes.DEFAULT_TYPE) -> None:
-    sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
-    text = "🏆 Daily Leaderboard:\n\n" + "\n".join([f"{name}: {points} points" for name, points in sorted_leaderboard])
-    await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
 
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
     await send_question(context, is_test=True)
-    await update.message.reply_text("✅ Test question sent.")
-
-async def reset_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-    global leaderboard
-    leaderboard = {}
-    save_leaderboard()
-    await update.message.reply_text("✅ Leaderboard reset.")
-
-async def post_custom_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-    try:
-        question_data = json.loads(context.args[0])
-        await send_question(context, custom_question=question_data)
-        await update.message.reply_text("✅ Custom question sent.")
-    except (json.JSONDecodeError, IndexError):
-        await update.message.reply_text("❌ Invalid question format. Please provide a JSON string.")
+    await update.message.reply_text("✅ Test question sent to channel.")
 
 async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != OWNER_ID:
@@ -159,24 +106,18 @@ def get_utc_time(hour, minute, tz_name):
     return local_time.astimezone(pytz.utc).time()
 
 def main():
-    load_leaderboard()
-
     application = Application.builder().token(BOT_TOKEN).build()
     job_queue = application.job_queue
 
     # Use pytz conversion for Gaza timezone times
     job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
-    job_queue.run_daily(send_question, get_utc_time(12, 0, "Asia/Gaza"))
+    job_queue.run_daily(send_question, get_utc_time(11, 15, "Asia/Gaza"), name="second_question")
     job_queue.run_daily(send_question, get_utc_time(18, 0, "Asia/Gaza"))
-    job_queue.run_daily(send_daily_leaderboard, get_utc_time(23, 59, "Asia/Gaza"))
 
     job_queue.run_repeating(heartbeat, interval=60)
 
-    application.add_handler(CommandHandler("leaderboard", show_leaderboard))
-    application.add_handler(CommandHandler("testquestion", test_question))
+    application.add_handler(CommandHandler("test", test_question))
     application.add_handler(CallbackQueryHandler(handle_answer))
-    application.add_handler(CommandHandler("resetleaderboard", reset_leaderboard))
-    application.add_handler(CommandHandler("customquestion", post_custom_question))
     application.add_handler(CommandHandler("setwebhook", set_webhook))
 
     # Webhook configuration
