@@ -231,4 +231,4 @@ class QuizBot:
 
 if __name__ == "__main__":
     bot = QuizBot()
-    asyncio.run(bot.run())
+    asyncio.get_event_loop().run_until_complete(bot.run())
