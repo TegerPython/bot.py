@@ -26,7 +26,7 @@ answered_users = set()
 current_question = None
 current_message_id = None
 
-async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False, update: Update = None) -> bool:
+async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> bool:
     global current_question, answered_users, current_message_id
     answered_users = set()
 
@@ -42,7 +42,7 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False, updat
 
     try:
         message = await context.bot.send_message(
-            chat_id=CHANNEL_ID, # Always send to the channel when the command is used from dm
+            chat_id=CHANNEL_ID,
             text=f"📝 {'Test' if is_test else 'Daily'} Challenge:\n\n{current_question['question']}",
             reply_markup=reply_markup,
             disable_web_page_preview=True,
@@ -51,18 +51,12 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False, updat
 
         if message and message.message_id:
             current_message_id = message.message_id
-            if update:
-                await update.message.reply_text("✅ Test question sent to channel.")
             return True
         else:
-            if update:
-                await update.message.reply_text("❌ Failed to send test question: Telegram API returned an empty message or no message ID.")
             return False
 
     except Exception as e:
         logger.error(f"Failed to send question: {e}")
-        if update:
-            await update.message.reply_text(f"❌ Failed to send test question: {e}")
         return False
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -72,10 +66,10 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_id = query.from_user.id
     username = query.from_user.first_name
 
-    logger.info(f"Callback query received from user {user_id}: {query.data}") #add log
+    logger.info(f"Callback query received from user {user_id}: {query.data}")
 
     if user_id in answered_users:
-        logger.info(f"User {user_id} already answered.") #add log
+        logger.info(f"User {user_id} already answered.")
         await query.answer("❌ You already answered this question.")
         return
 
@@ -83,7 +77,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_answer = query.data
     correct = user_answer == current_question["answer"]
 
-    logger.info(f"User {user_id} answer: {user_answer}, correct answer: {current_question['answer']}") #add log
+    logger.info(f"User {user_id} answer: {user_answer}, correct answer: {current_question['answer']}")
 
     if correct:
         await query.answer("✅ Correct!")
@@ -115,7 +109,10 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
-    await send_question(context, is_test=True, update=update)
+    if await send_question(context, is_test=True): #send question and check if it was sent
+        await update.message.reply_text("✅ Test question sent to channel.")
+    else:
+        await update.message.reply_text("❌ Failed to send test question.")
 
 async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != OWNER_ID:
