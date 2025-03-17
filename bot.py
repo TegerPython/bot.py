@@ -18,8 +18,8 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
 WEBHOOK_URL = os.getenv("RENDER_WEBHOOK_URL")
 
-# Leaderboard file
-LEADERBOARD_FILE = "leaderboard.json"
+# Leaderboard file (Not used in this version)
+# LEADERBOARD_FILE = "leaderboard.json"
 
 # Questions
 questions = [
@@ -27,23 +27,23 @@ questions = [
     {"question": "2 + 2 equals?", "options": ["3", "4", "5", "6"], "answer": "4", "explanation": "Simple math!"}
 ]
 
-leaderboard = {}
+# leaderboard = {} # Not used in this version
 answered_users = set()
 current_question = None
 current_message_id = None
 
-def load_leaderboard():
-    global leaderboard
-    if os.path.exists(LEADERBOARD_FILE):
-        with open(LEADERBOARD_FILE, "r") as file:
-            leaderboard = json.load(file)
-    else:
-        logger.warning("⚠️ No leaderboard file found, starting fresh.")
-        leaderboard = {}
+# def load_leaderboard(): # Not used in this version
+#     global leaderboard
+#     if os.path.exists(LEADERBOARD_FILE):
+#         with open(LEADERBOARD_FILE, "r") as file:
+#             leaderboard = json.load(file)
+#     else:
+#         logger.warning("⚠️ No leaderboard file found, starting fresh.")
+#         leaderboard = {}
 
-def save_leaderboard():
-    with open(LEADERBOARD_FILE, "w") as file:
-        json.dump(leaderboard, file, indent=2)
+# def save_leaderboard(): # Not used in this version
+#     with open(LEADERBOARD_FILE, "w") as file:
+#         json.dump(leaderboard, file, indent=2)
 
 async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> None:
     global current_question, answered_users, current_message_id
@@ -81,8 +81,8 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if correct:
         await query.answer("✅ Correct!")
-        leaderboard[username] = leaderboard.get(username, 0) + 1
-        save_leaderboard()
+        # leaderboard[username] = leaderboard.get(username, 0) + 1 # Not used in this version
+        # save_leaderboard() # Not used in this version
 
         explanation = current_question.get("explanation", "No explanation provided.")
         edited_text = (
@@ -90,7 +90,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"Question: {current_question['question']}\n"
             f"✅ Correct Answer: {current_question['answer']}\n"
             f"ℹ️ Explanation: {explanation}\n\n"
-            f"🏆 Winner: {username} (+1 point)"
+            f"🏆 Winner: {username}" # Removed points part
         )
         try:
             await context.bot.edit_message_text(
@@ -103,19 +103,19 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     else:
         await query.answer("❌ Incorrect.")
 
-async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
-    text = "🏆 Leaderboard:\n\n" + "\n".join([f"{name}: {points} points" for name, points in sorted_leaderboard])
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=text)
+# async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None: # Not used in this version
+#     sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
+#     text = "🏆 Leaderboard:\n\n" + "\n".join([f"{name}: {points} points" for name, points in sorted_leaderboard])
+#     await context.bot.send_message(chat_id=update.effective_chat.id, text=text)
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
 
-async def send_daily_leaderboard(context: ContextTypes.DEFAULT_TYPE) -> None:
-    sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
-    text = "🏆 Daily Leaderboard:\n\n" + "\n".join([f"{name}: {points} points" for name, points in sorted_leaderboard])
-    await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
+# async def send_daily_leaderboard(context: ContextTypes.DEFAULT_TYPE) -> None: # Not used in this version
+#     sorted_leaderboard = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
+#     text = "🏆 Daily Leaderboard:\n\n" + "\n".join([f"{name}: {points} points" for name, points in sorted_leaderboard])
+#     await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
 
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != OWNER_ID:
@@ -131,7 +131,7 @@ def get_utc_time(hour, minute, tz_name):
     return local_time.astimezone(pytz.utc).time()
 
 def main():
-    load_leaderboard()
+    # load_leaderboard() # Not used in this version
 
     application = Application.builder().token(BOT_TOKEN).build()
     job_queue = application.job_queue
@@ -140,22 +140,21 @@ def main():
     job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
     job_queue.run_daily(send_question, get_utc_time(12, 0, "Asia/Gaza"))
     job_queue.run_daily(send_question, get_utc_time(18, 0, "Asia/Gaza"))
-    job_queue.run_daily(send_daily_leaderboard, get_utc_time(23, 59, "Asia/Gaza"))
+    # job_queue.run_daily(send_daily_leaderboard, get_utc_time(23, 59, "Asia/Gaza")) # Not used in this version
 
     job_queue.run_repeating(heartbeat, interval=60)
 
-    application.add_handler(CommandHandler("leaderboard", show_leaderboard))
+    # application.add_handler(CommandHandler("leaderboard", show_leaderboard)) # Not used in this version
     application.add_handler(CommandHandler("test", test_question))
     application.add_handler(CallbackQueryHandler(handle_answer))
 
     # Webhook configuration
     application.run_webhook(
-    listen="0.0.0.0",
-    port=int(os.getenv("PORT", 8443)),  # Use the correct port
-    url_path=BOT_TOKEN,
-    webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-)
-
+        listen="0.0.0.0",
+        port=int(os.getenv("PORT", 8443)),  # Use the correct port
+        url_path=BOT_TOKEN,
+        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}"
+    )
 
 if __name__ == "__main__":
     main()
