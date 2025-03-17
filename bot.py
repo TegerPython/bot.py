@@ -1,17 +1,15 @@
-# Part 1 of 2 (approximately 50% of the characters)
 import os
 import json
 import logging
 import asyncio
 import pytz
-from datetime import datetime, time
+from datetime import datetime, timedelta
 from telegram import Update, Poll
 from telegram.ext import (
     Application,
     CommandHandler,
     PollAnswerHandler,
-    ContextTypes,
-    JobQueue
+    ContextTypes
 )
 import httpx
 import base64
@@ -51,8 +49,8 @@ class QuizBot:
     async def initialize(self):
         """Initialize the bot"""
         await self.load_leaderboard()
-        await self.setup_schedule()
         await self.app.bot.set_webhook(WEBHOOK_URL)
+        asyncio.create_task(self.question_scheduler())  # Start custom scheduling loop
 
     async def load_leaderboard(self):
         """Load leaderboard from GitHub"""
@@ -69,7 +67,7 @@ class QuizBot:
             self.leaderboard = {}
 
     async def fetch_questions(self):
-        """Fetch questions from GitHub"""
+        """Fetch latest questions from GitHub"""
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
@@ -101,7 +99,7 @@ class QuizBot:
         except Exception as e:
             logger.error(f"Leaderboard update failed: {e}")
 
-    async def post_question(self, context: ContextTypes.DEFAULT_TYPE):
+    async def post_question(self):
         """Post a question to the channel"""
         try:
             questions = await self.fetch_questions()
@@ -110,7 +108,7 @@ class QuizBot:
                 return
 
             question = questions[datetime.now().day % len(questions)]
-            poll = await context.bot.send_poll(
+            poll = await self.app.bot.send_poll(
                 chat_id=CHANNEL_ID,
                 question=question["question"],
                 options=question["options"],
@@ -124,43 +122,34 @@ class QuizBot:
         except Exception as e:
             logger.error(f"Failed to post question: {e}")
 
-    async def heartbeat(self, context: ContextTypes.DEFAULT_TYPE):
+    async def heartbeat(self):
         """Send regular status updates"""
-        now = datetime.now(GAZA_TZ).strftime("%Y-%m-%d %H:%M:%S")
-        await context.bot.send_message(
-            chat_id=OWNER_ID,
-            text=f"💓 Bot operational - Last check: {now}\n"
-                 f"Questions loaded: {len(await self.fetch_questions())}\n"
-                 f"Leaderboard entries: {len(self.leaderboard)}"
-        )
-
-    def get_utc_time(self, hour, minute):
-        local_time = GAZA_TZ.localize(datetime.now().replace(hour=hour, minute=minute))
-        return local_time.astimezone(pytz.utc).time()
-
-    async def setup_schedule(self):
-        """Configure daily schedule"""
-        job_queue = self.app.job_queue
-        
-        # Three daily questions
-        for t in [(8,0), (12,0), (18,0)]:
-            job_queue.run_daily(
-                self.post_question,
-                time=self.get_utc_time(*t),
-                days=tuple(range(7))
+        while True:
+            now = datetime.now(GAZA_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            await self.app.bot.send_message(
+                chat_id=OWNER_ID,
+                text=f"💓 Bot operational - Last check: {now}\n"
+                     f"Questions loaded: {len(await self.fetch_questions())}\n"
+                     f"Leaderboard entries: {len(self.leaderboard)}"
             )
-        
-        # Daily leaderboard
-        job_queue.run_daily(
-            self.show_leaderboard,
-            time=self.get_utc_time(19,0),
-            days=tuple(range(7))
-        )
-        
-        # Part 2 of 2 (approximately 50% of the characters)
-        
-        # 1-minute heartbeat
-        job_queue.run_repeating(self.heartbeat, interval=60)
+            await asyncio.sleep(60)  # Every 1 minute
+
+    async def question_scheduler(self):
+        """Custom loop to post questions at 8 AM, 12 PM, and 6 PM"""
+        post_times = [time(8, 0), time(12, 0), time(18, 0)]
+
+        while True:
+            now = datetime.now(GAZA_TZ)
+            next_time = min([t for t in post_times if t > now.time()], default=post_times[0])
+            next_post = datetime.combine(now.date(), next_time, GAZA_TZ)
+
+            if next_time == post_times[0] and now.time() > post_times[-1]:
+                next_post += timedelta(days=1)  # Move to next day if it's past last slot
+
+            wait_time = (next_post - now).total_seconds()
+            logger.info(f"Next question at {next_post.strftime('%Y-%m-%d %H:%M:%S')}")
+            await asyncio.sleep(wait_time)
+            await self.post_question()
 
     async def test_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Owner-only test command"""
@@ -169,13 +158,13 @@ class QuizBot:
             return
             
         try:
-            questions = await self.fetch_questions()
+            questions = await self.fetch_questions()  # Always fetch latest
             if not questions:
                 await update.message.reply_text("❌ No questions available")
                 return
 
             question = random.choice(questions)
-            poll = await context.bot.send_poll(
+            poll = await self.app.bot.send_poll(
                 chat_id=CHANNEL_ID,
                 question=question["question"],
                 options=question["options"],
@@ -196,15 +185,7 @@ class QuizBot:
         )
         await update.message.reply_text(text)
 
-    async def show_leaderboard(self, context: ContextTypes.DEFAULT_TYPE):
-        """Post daily leaderboard to channel"""
-        sorted_board = sorted(self.leaderboard.items(), key=lambda x: x[1], reverse=True)
-        text = "🏆 Daily Leaderboard:\n" + "\n".join(
-            f"{i}. {name}: {score}" for i, (name, score) in enumerate(sorted_board, 1)
-        )
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
-
-    async def handle_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def handle_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         answer = update.poll_answer
         user = update.effective_user
         
@@ -225,7 +206,7 @@ class QuizBot:
         await self.initialize()
         await self.app.initialize()
         await self.app.start()
-        await asyncio.Event().wait()
+        await asyncio.gather(self.heartbeat())
 
 if __name__ == "__main__":
     bot = QuizBot()
