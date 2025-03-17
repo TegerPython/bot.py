@@ -7,3 +7,7 @@ httpx
 gunicorn==21.2.0
 hypercorn==0.14.4
 aiohttp~=3.8.5
+pyTelegramBotAPI
+python-dotenv
+httpx
+pytz
