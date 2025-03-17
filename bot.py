@@ -4,14 +4,8 @@ import logging
 import asyncio
 import pytz
 from datetime import datetime, time, timedelta
-from telegram import Update, Poll, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    JobQueue
-)
+import telebot
+from telebot import types
 import httpx
 import base64
 import random
@@ -44,18 +38,19 @@ class QuizBot:
         self.answered_users = {}
         self.questions = []
         self.current_question_index = 0
-        self.app = Application.builder().token(BOT_TOKEN).build()
+        self.bot = telebot.TeleBot(BOT_TOKEN)
 
         # Register handlers
-        self.app.add_handler(CommandHandler("test", self.test_cmd))
-        self.app.add_handler(CommandHandler("leaderboard", self.show_leaderboard_cmd))
-        self.app.add_handler(CallbackQueryHandler(self.callback_query_handler))
+        self.bot.message_handler(commands=['test'])(self.test_cmd)
+        self.bot.message_handler(commands=['leaderboard'])(self.show_leaderboard_cmd)
+        self.bot.callback_query_handler(func=lambda call: True)(self.callback_query_handler)
 
     async def initialize(self):
         """Initialize the bot"""
         await self.load_leaderboard()
         await self.fetch_questions_and_setup()
-        await self.app.bot.set_webhook(WEBHOOK_URL)
+        self.bot.remove_webhook()
+        self.bot.set_webhook(url=WEBHOOK_URL)
 
     async def load_leaderboard(self):
         """Load leaderboard from GitHub"""
@@ -121,12 +116,12 @@ class QuizBot:
 
         question_text = f"📚 *English Learning Challenge!*\n{q_data['question']}\n\n🕒 You have *30 minutes* to answer!"
 
-        markup = InlineKeyboardMarkup()
+        markup = types.InlineKeyboardMarkup()
         for ans in q_data["answers"]:
-            markup.add(InlineKeyboardButton(ans, callback_data=ans))
+            markup.add(types.InlineKeyboardButton(ans, callback_data=ans))
 
         async def send_and_schedule():
-            msg = await self.app.bot.send_message(CHANNEL_ID, question_text, parse_mode="Markdown", reply_markup=markup)
+            msg = self.bot.send_message(CHANNEL_ID, question_text, parse_mode="Markdown", reply_markup=markup)
             self.answered_users["message_id"] = msg.message_id
             threading.Timer(1800, self.delete_question, args=[msg.message_id]).start()
 
@@ -136,15 +131,15 @@ class QuizBot:
         """Delete the question message"""
         async def delete():
             try:
-                await self.app.bot.delete_message(chat_id=CHANNEL_ID, message_id=message_id)
+                self.bot.delete_message(chat_id=CHANNEL_ID, message_id=message_id)
             except Exception as e:
                 logger.error(f"Failed to delete message: {e}")
         asyncio.run(delete())
 
-    async def heartbeat(self, context: ContextTypes.DEFAULT_TYPE):
+    async def heartbeat(self):
         """Send regular status updates"""
         now = datetime.now(GAZA_TZ).strftime("%Y-%m-%d %H:%M:%S")
-        await context.bot.send_message(
+        self.bot.send_message(
             chat_id=OWNER_ID,
             text=f"💓 Bot operational - Last check: {now}\n"
                  f"Questions loaded: {len(self.questions)}\n"
@@ -169,55 +164,53 @@ class QuizBot:
 
     def setup_schedule(self):
         threading.Thread(target=self.question_scheduler).start()
-        job_queue = self.app.job_queue
-        job_queue.run_repeating(self.heartbeat, interval=60)
+        self.bot.set_update_listener(self.heartbeat)
 
-    async def test_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def test_cmd(self, message):
         """Owner-only test command"""
-        if update.effective_user.id != OWNER_ID:
-            await update.message.reply_text("🚫 Unauthorized")
+        if message.from_user.id != OWNER_ID:
+            self.bot.reply_to(message, "🚫 Unauthorized")
             return
 
         try:
             question = random.choice(self.questions)
-            poll = await context.bot.send_poll(
+            poll = self.bot.send_poll(
                 chat_id=CHANNEL_ID,
                 question=question["question"],
                 options=question["answers"],
-                type=Poll.QUIZ,
+                type="quiz",
                 correct_option_id=question["answers"].index(question["correct"]),
                 explanation=question.get("explanation", "")
             )
-            await update.message.reply_text(f"✅ Test question sent: {poll.link}")
+            self.bot.reply_to(message, f"✅ Test question sent: {poll.link}")
         except Exception as e:
             logger.error(f"Test failed: {e}")
-            await update.message.reply_text(f"❌ Test failed: {str(e)}")
+            self.bot.reply_to(message, f"❌ Test failed: {str(e)}")
 
-    async def show_leaderboard_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def show_leaderboard_cmd(self, message):
         """Show leaderboard in private chat"""
         sorted_board = sorted(self.leaderboard.items(), key=lambda x: x[1], reverse=True)
         text = "🏆 Current Leaderboard:\n" + "\n".join(
             f"{i}. {name}: {score}" for i, (name, score) in enumerate(sorted_board, 1)
         )
-        await update.message.reply_text(text)
+        self.bot.reply_to(message, text)
 
-    async def show_leaderboard(self, context: ContextTypes.DEFAULT_TYPE):
+    def show_leaderboard(self):
         """Post daily leaderboard to channel"""
         sorted_board = sorted(self.leaderboard.items(), key=lambda x: x[1], reverse=True)
         text = "🏆 Daily Leaderboard:\n" + "\n".join(
             f"{i}. {name}: {score}" for i, (name, score) in enumerate(sorted_board, 1)
         )
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
+        self.bot.send_message(chat_id=CHANNEL_ID, text=text)
 
-    async def callback_query_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def callback_query_handler(self, call):
         """Handle answer selection"""
-        call = update.callback_query
         user_id = call.from_user.id
         username = call.from_user.username or call.from_user.first_name
         answer = call.data
 
         if user_id in self.answered_users:
-            await context.bot.answer_callback_query(call.id, "❌ You've already answered!", show_alert=True)
+            self.bot.answer_callback_query(call.id, "❌ You've already answered!", show_alert=True)
             return
 
         self.answered_users[user_id] = True  # Mark as answered
@@ -226,32 +219,29 @@ class QuizBot:
         current_question = self.questions[(self.current_question_index - 1) % len(self.questions)]
         if answer == current_question["correct"]:
             self.leaderboard[username] = self.leaderboard.get(username, 0) + 1
-            await context.bot.edit_message_text(
+            self.bot.edit_message_text(
                 f"✅ *{username} answered correctly!* The correct answer was *{answer}*.\n\n📖 Explanation: {current_question['explanation']}",
                 CHANNEL_ID, self.answered_users["message_id"], parse_mode="Markdown"
             )
-            await self.show_leaderboard(context)
+            self.show_leaderboard()
         else:
-            await context.bot.answer_callback_query(
+            self.bot.answer_callback_query(
                 call.id, f"❌ Wrong answer! The correct answer was *{current_question['correct']}*.\n\n📖 Explanation: {current_question['explanation']}", show_alert=True
             )
 
         # Inform about the next question
         next_question_time = "14:00"  # Example: Next question at 2:00 PM
-        await context.bot.send_message(call.from_user.id, f"⏳ *Next question will be posted at {next_question_time}*.\nStay tuned!")
+        self.bot.send_message(call.from_user.id, f"⏳ *Next question will be posted at {next_question_time}*.\nStay tuned!")
 
         try:
-            await self.update_github_leaderboard()
+            self.update_github_leaderboard()
         except Exception as e:
             logger.error(f"Leaderboard update failed: {e}")
 
-    async def run(self):
+    def run(self):
         """Start the application"""
-        await self.initialize()
-        await self.app.initialize()
-        await self.app.start()
-        await asyncio.Event().wait()
+        self.bot.polling(none_stop=True)
 
 if __name__ == "__main__":
     bot = QuizBot()
-    asyncio.run(bot.run())
+    bot.run()
