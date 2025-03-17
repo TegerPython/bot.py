@@ -1,4 +1,5 @@
-python-telegram-bot==20.6
+python-telegram-bot[webhooks]
+
 Flask>=2.0.0
 pytz
 Werkzeug==2.2.3
