@@ -35,8 +35,6 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> bo
     else:
         current_question = questions[datetime.now().day % len(questions)]
 
-    logger.info(f"Sending question: {current_question['question']} to chat ID: {CHANNEL_ID}")
-
     keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in current_question["options"]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -66,18 +64,13 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_id = query.from_user.id
     username = query.from_user.first_name
 
-    logger.info(f"Callback query received from user {user_id}: {query.data}")
-
     if user_id in answered_users:
-        logger.info(f"User {user_id} already answered.")
         await query.answer("❌ You already answered this question.")
         return
 
     answered_users.add(user_id)
     user_answer = query.data
     correct = user_answer == current_question["answer"]
-
-    logger.info(f"User {user_id} answer: {user_answer}, correct answer: {current_question['answer']}")
 
     if correct:
         await query.answer("✅ Correct!")
@@ -109,7 +102,7 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
-    if await send_question(context, is_test=True): #send question and check if it was sent
+    if await send_question(context, is_test=True):
         await update.message.reply_text("✅ Test question sent to channel.")
     else:
         await update.message.reply_text("❌ Failed to send test question.")
