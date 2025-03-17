@@ -180,7 +180,7 @@ def main():
     application.add_handler(CommandHandler("setwebhook", set_webhook))
 
     # Webhook configuration
-    port = int(os.getenv("PORT", 8443))
+    port = int(os.environ.get("PORT", 5000)) # Use 5000 as default
     application.run_webhook(
         listen="0.0.0.0",
         port=port,
@@ -189,4 +189,5 @@ def main():
     )
 
 if __name__ == "__main__":
+    main():
     main()
