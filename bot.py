@@ -42,12 +42,19 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False, updat
         message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text=f"📝 {'Test' if is_test else 'Daily'} Challenge:\n\n{current_question['question']}",
-            reply_markup=reply_markup
+            reply_markup=reply_markup,
+            disable_web_page_preview=True,  # Prevent link previews
+            disable_notification=False,     # Enable notifications
         )
-        current_message_id = message.message_id
-        if update:
-            await update.message.reply_text("✅ Test question sent to channel.")
-        return True
+        if message and message.message_id: #check if the message was sent and the message id exists
+            current_message_id = message.message_id
+            if update:
+                await update.message.reply_text("✅ Test question sent to channel.")
+            return True
+        else:
+            if update:
+                await update.message.reply_text("❌ Failed to send test question: Telegram API returned an empty message or no message ID.")
+            return False
 
     except Exception as e:
         logger.error(f"Failed to send question: {e}")
