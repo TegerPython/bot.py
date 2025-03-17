@@ -26,7 +26,7 @@ answered_users = set()
 current_question = None
 current_message_id = None
 
-async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> None:
+async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False, update: Update = None) -> bool:
     global current_question, answered_users, current_message_id
     answered_users = set()
 
@@ -38,12 +38,22 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> No
     keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in current_question["options"]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    message = await context.bot.send_message(
-        chat_id=CHANNEL_ID,
-        text=f"📝 {'Test' if is_test else 'Daily'} Challenge:\n\n{current_question['question']}",
-        reply_markup=reply_markup
-    )
-    current_message_id = message.message_id
+    try:
+        message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=f"📝 {'Test' if is_test else 'Daily'} Challenge:\n\n{current_question['question']}",
+            reply_markup=reply_markup
+        )
+        current_message_id = message.message_id
+        if update:
+            await update.message.reply_text("✅ Test question sent to channel.")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to send question: {e}")
+        if update:
+            await update.message.reply_text(f"❌ Failed to send test question: {e}")
+        return False
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     global answered_users, current_question, current_message_id
@@ -90,8 +100,7 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
-    await send_question(context, is_test=True)
-    await update.message.reply_text("✅ Test question sent to channel.")
+    await send_question(context, is_test=True, update=update)
 
 async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != OWNER_ID:
