@@ -35,12 +35,14 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False, updat
     else:
         current_question = questions[datetime.now().day % len(questions)]
 
+    logger.info(f"Sending question: {current_question['question']} to chat ID: {CHANNEL_ID}") # Added log
+
     keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in current_question["options"]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
         message = await context.bot.send_message(
-            chat_id=update.effective_chat.id if update else CHANNEL_ID, #send to dm if update exists, else to channel
+            chat_id=update.effective_chat.id if update else CHANNEL_ID,
             text=f"📝 {'Test' if is_test else 'Daily'} Challenge:\n\n{current_question['question']}",
             reply_markup=reply_markup,
             disable_web_page_preview=True,
@@ -48,7 +50,7 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False, updat
         )
 
         if message and message.message_id:
-            if update and update.effective_chat.id != CHANNEL_ID: # only copy if sent from dm
+            if update and update.effective_chat.id != CHANNEL_ID:
                 copied_message = await context.bot.copy_message(
                     chat_id=CHANNEL_ID,
                     from_chat_id=update.effective_chat.id,
@@ -160,6 +162,13 @@ def main():
         url_path=BOT_TOKEN,
         webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
     )
+
+   def job_callback(context: ContextTypes.DEFAULT_TYPE):
+        logger.info(f"Job {context.job.name} called") # add log for job
+
+    job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"), callback=job_callback)
+    job_queue.run_daily(send_question, get_utc_time(11, 22, "Asia/Gaza"), name="second_question", callback=job_callback)
+    job_queue.run_daily(send_question, get_utc_time(18, 0, "Asia/Gaza"), callback=job_callback)
 
 if __name__ == "__main__":
     main()
