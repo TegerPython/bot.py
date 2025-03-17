@@ -146,11 +146,20 @@ async def maintenance_job(context: ContextTypes.DEFAULT_TYPE):
     cleaned = question_manager.cleanup_old_questions()
     logger.info(f"Cleaned up {cleaned} old questions")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bot is running! Use /test to send a test question")
+async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    await context.bot.send_message(
+        chat_id=OWNER_ID,
+        text=f"💓 Bot status at {now}\nActive questions: {len(question_manager.active_questions)}"
+    )
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
+
+    # Clear existing jobs to avoid duplicates
+    if application.job_queue:
+        application.job_queue.stop()
+        application.job_queue.scheduler.remove_all_jobs()
 
     # Schedule daily questions
     tz = pytz.timezone("Asia/Gaza")
@@ -173,6 +182,7 @@ def main():
 
     # Maintenance jobs
     application.job_queue.run_repeating(maintenance_job, interval=300, first=10)
+    application.job_queue.run_repeating(heartbeat, interval=3600)  # Every hour
 
     # Webhook setup
     application.run_webhook(
