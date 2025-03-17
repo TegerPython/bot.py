@@ -1,6 +1,8 @@
 import os
 import logging
 import random
+import signal
+import sys
 from datetime import datetime, time, timedelta
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
@@ -156,6 +158,17 @@ async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bot is running! Use /test to send a test question")
 
+async def shutdown(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("⛔ Unauthorized access")
+        return
+
+    await update.message.reply_text("🛑 Shutting down bot...")
+    logger.info("Shutting down bot gracefully...")
+    await context.application.stop()
+    await context.application.shutdown()
+    sys.exit(0)
+
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
@@ -181,11 +194,22 @@ def main():
     # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("test", test_command))
+    application.add_handler(CommandHandler("shutdown", shutdown))
     application.add_handler(CallbackQueryHandler(handle_answer, pattern=r"^ans_"))
 
     # Maintenance jobs
     application.job_queue.run_repeating(maintenance_job, interval=300, first=10)
     application.job_queue.run_repeating(heartbeat, interval=3600)  # Every hour
+
+    # Handle graceful shutdown on SIGINT or SIGTERM
+    def signal_handler(signum, frame):
+        logger.info(f"Received signal {signum}, shutting down gracefully...")
+        application.stop()
+        application.shutdown()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     # Webhook setup
     application.run_webhook(
