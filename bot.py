@@ -145,7 +145,7 @@ def main():
 
     # Use pytz conversion for Gaza timezone times
     job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
-    job_queue.run_daily(send_question, get_utc_time(11, 22, "Asia/Gaza"), name="second_question")
+    job_queue.run_daily(send_question, get_utc_time(11, 50, "Asia/Gaza"), name="second_question")
     job_queue.run_daily(send_question, get_utc_time(18, 0, "Asia/Gaza"))
 
     job_queue.run_repeating(heartbeat, interval=60)
