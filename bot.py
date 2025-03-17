@@ -42,7 +42,7 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False, updat
 
     try:
         message = await context.bot.send_message(
-            chat_id=update.effective_chat.id if update else CHANNEL_ID,
+            chat_id=CHANNEL_ID, # Always send to the channel when the command is used from dm
             text=f"📝 {'Test' if is_test else 'Daily'} Challenge:\n\n{current_question['question']}",
             reply_markup=reply_markup,
             disable_web_page_preview=True,
@@ -50,25 +50,10 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False, updat
         )
 
         if message and message.message_id:
-            if update and update.effective_chat.id != CHANNEL_ID:
-                copied_message = await context.bot.copy_message(
-                    chat_id=CHANNEL_ID,
-                    from_chat_id=update.effective_chat.id,
-                    message_id=message.message_id
-                )
-                if copied_message and copied_message.message_id:
-                    if update:
-                        await update.message.reply_text("✅ Test question sent to channel.")
-                    return True
-                else:
-                    if update:
-                        await update.message.reply_text("❌ Failed to send test question: Telegram API returned an empty copied message or no message ID.")
-                    return False
-            else:
-                current_message_id = message.message_id
-                if update:
-                    await update.message.reply_text("✅ Test question sent to channel.")
-                return True
+            current_message_id = message.message_id
+            if update:
+                await update.message.reply_text("✅ Test question sent to channel.")
+            return True
         else:
             if update:
                 await update.message.reply_text("❌ Failed to send test question: Telegram API returned an empty message or no message ID.")
@@ -87,13 +72,18 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_id = query.from_user.id
     username = query.from_user.first_name
 
+    logger.info(f"Callback query received from user {user_id}: {query.data}") #add log
+
     if user_id in answered_users:
+        logger.info(f"User {user_id} already answered.") #add log
         await query.answer("❌ You already answered this question.")
         return
 
     answered_users.add(user_id)
     user_answer = query.data
     correct = user_answer == current_question["answer"]
+
+    logger.info(f"User {user_id} answer: {user_answer}, correct answer: {current_question['answer']}") #add log
 
     if correct:
         await query.answer("✅ Correct!")
