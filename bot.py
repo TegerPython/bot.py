@@ -1,7 +1,7 @@
 import os
 import logging
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application,
@@ -158,9 +158,11 @@ def main():
     
     for time_str in times:
         hour, minute = map(int, time_str.split(":"))
+        # Create proper time object
+        target_time = time(hour=hour, minute=minute, tzinfo=tz)
         application.job_queue.run_daily(
             scheduled_question,
-            time=datetime.time(hour=hour, minute=minute, tzinfo=tz),
+            time=target_time,
             days=tuple(range(7))
         )
 
