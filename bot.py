@@ -35,7 +35,7 @@ current_message_id = None
 def load_leaderboard():
     global leaderboard
     if os.path.exists(LEADERBOARD_FILE):
-        with open(LE as file:
+        with open(LEADERBOARD_FILE, "r") as file:
             leaderboard = json.load(file)
     else:
         logger.warning("⚠️ No leaderboard file found, starting fresh.")
@@ -180,7 +180,7 @@ def main():
     application.add_handler(CommandHandler("setwebhook", set_webhook))
 
     # Webhook configuration
-    port = int(os.environ.get("PORT", 5000)) # Use 5000 as default
+    port = int(os.environ.get("PORT", 5000))
     application.run_webhook(
         listen="0.0.0.0",
         port=port,
