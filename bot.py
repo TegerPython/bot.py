@@ -35,7 +35,7 @@ current_message_id = None
 def load_leaderboard():
     global leaderboard
     if os.path.exists(LEADERBOARD_FILE):
-        with open(LEADERBOARD_FILE, "r") as file:
+        with open(LE as file:
             leaderboard = json.load(file)
     else:
         logger.warning("⚠️ No leaderboard file found, starting fresh.")
@@ -189,5 +189,4 @@ def main():
     )
 
 if __name__ == "__main__":
-    main():
     main()
