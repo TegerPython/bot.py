@@ -46,7 +46,7 @@ QUESTIONS = [
 
 class QuestionManager:
     def __init__(self):
-        self.active_questions = {}  # {message_id: {question, answer, timestamp}}
+        self.active_questions = {}
 
     def add_question(self, message_id, question_data):
         self.active_questions[message_id] = {
@@ -71,147 +71,145 @@ question_manager = QuestionManager()
 
 async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False):
     try:
-        # Select question
+        logger.info("Attempting to send question...")
         question_data = random.choice(QUESTIONS) if is_test else QUESTIONS[datetime.now().day % len(QUESTIONS)]
-
-        # Create buttons with unique identifiers
+        
         buttons = [
             InlineKeyboardButton(text=opt, callback_data=f"ans_{opt}")
             for opt in question_data["options"]
         ]
 
-        # Send message
         message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text=f"📝 {'Test' if is_test else 'Daily'} Question:\n\n{question_data['question']}",
             reply_markup=InlineKeyboardMarkup([buttons])
         )
 
-        # Store question state
         question_manager.add_question(message.message_id, question_data)
+        logger.info(f"Question sent successfully! Message ID: {message.message_id}")
         return True
-
     except Exception as e:
-        logger.error(f"Failed to send question: {e}")
+        logger.error(f"Failed to send question: {str(e)}")
         return False
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    try:
+        query = update.callback_query
+        await query.answer()
+        logger.info(f"Received answer from {query.from_user.id}")
 
-    message_id = query.message.message_id
-    user_answer = query.data.split("_")[1]  # Extract answer from "ans_<answer>"
-    question_data = question_manager.get_answer(message_id)
+        message_id = query.message.message_id
+        user_answer = query.data.split("_")[1]
+        question_data = question_manager.get_answer(message_id)
 
-    if not question_data:
-        await query.edit_message_text("⚠️ This question has expired")
-        return
+        if not question_data:
+            await query.edit_message_text("⚠️ This question has expired")
+            return
 
-    if user_answer == question_data["answer"]:
-        response = "✅ Correct!"
-    else:
-        # Get explanation from original questions list
-        explanation = next(
-            (q.get("explanation", "") for q in QUESTIONS 
-             if q["question"] == question_data["question"]),
-            "No explanation available"
-        )
-        response = (
-            f"❌ Incorrect. Correct answer: {question_data['answer']}\n"
-            f"📖 Explanation: {explanation}"
-        )
-
-    await query.edit_message_text(
-        text=f"{query.message.text}\n\n{response}",
-        reply_markup=None
-    )
+        response = ("✅ Correct!" if user_answer == question_data["answer"] else 
+                   f"❌ Incorrect. Correct answer: {question_data['answer']}\n📖 Explanation: {next((q.get('explanation', '') for q in QUESTIONS if q['question'] == question_data['question'], 'No explanation')}")
+        
+        await query.edit_message_text(text=f"{query.message.text}\n\n{response}", reply_markup=None)
+    except Exception as e:
+        logger.error(f"Error handling answer: {str(e)}")
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("⛔ Unauthorized access")
-        return
-
     try:
+        logger.info(f"Received test command from {update.effective_user.id}")
+        if update.effective_user.id != OWNER_ID:
+            await update.message.reply_text("⛔ Unauthorized access")
+            return
+
         success = await send_question(context, is_test=True)
-        if success:
-            await update.message.reply_text("✅ Test question sent to channel!")
-        else:
-            await update.message.reply_text("❌ Failed to send test question")
+        response = "✅ Test question sent!" if success else "❌ Failed to send test question"
+        await update.message.reply_text(response)
     except Exception as e:
-        logger.error(f"Test command error: {e}")
-        await update.message.reply_text("🔥 Critical error in test command")
+        logger.error(f"Test command error: {str(e)}")
+        await update.message.reply_text("🔧 Error processing test command")
 
 async def scheduled_question(context: ContextTypes.DEFAULT_TYPE):
+    logger.info("Executing scheduled question job")
     await send_question(context)
 
-async def maintenance_job(context: ContextTypes.DEFAULT_TYPE):
-    cleaned = question_manager.cleanup_old_questions()
-    logger.info(f"Cleaned up {cleaned} old questions")
-
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    await context.bot.send_message(
-        chat_id=OWNER_ID,
-        text=f"💓 Bot status at {now}\nActive questions: {len(question_manager.active_questions)}"
-    )
+    try:
+        logger.info("Sending heartbeat...")
+        await context.bot.send_message(
+            chat_id=OWNER_ID,
+            text=f"💓 Bot Status:\nActive Questions: {len(question_manager.active_questions)}\nLast Check: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+    except Exception as e:
+        logger.error(f"Heartbeat failed: {str(e)}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bot is running! Use /test to send a test question")
+    await update.message.reply_text("🤖 Bot is operational!\nUse /test to send a test question")
 
-async def shutdown(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("⛔ Unauthorized access")
         return
-
-    await update.message.reply_text("🛑 Shutting down bot...")
-    logger.info("Shutting down bot gracefully...")
-    await context.application.stop()
-    await context.application.shutdown()
-    sys.exit(0)
+    status_report = (
+        f"🛠️ Debug Info:\n"
+        f"Active Questions: {len(question_manager.active_questions)}\n"
+        f"Scheduled Jobs: {len(context.application.job_queue.jobs())}\n"
+        f"Last Maintenance: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+    await update.message.reply_text(status_report)
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Clear existing jobs to avoid duplicates
+    # Clear existing jobs
     if application.job_queue:
-        for job in application.job_queue.jobs():
-            application.job_queue.scheduler.remove_job(job.id)
+        application.job_queue.scheduler.remove_all_jobs()
 
-    # Schedule daily questions
+    # Schedule daily questions with precise timezone handling
     tz = pytz.timezone("Asia/Gaza")
-    times = ["08:00", "12:30", "18:00"]
-    
-    for time_str in times:
-        hour, minute = map(int, time_str.split(":"))
-        # Create proper time object
-        target_time = time(hour=hour, minute=minute, tzinfo=tz)
+    schedule_times = [
+        tz.localize(datetime.strptime("08:00", "%H:%M")).time(),
+        tz.localize(datetime.strptime("12:30", "%H:%M")).time(),
+        tz.localize(datetime.strptime("18:00", "%H:%M")).time()
+    ]
+
+    for target_time in schedule_times:
         application.job_queue.run_daily(
             scheduled_question,
             time=target_time,
-            days=tuple(range(7))
+            days=tuple(range(7)),
+            name=f"ScheduledQuestion_{target_time}"
         )
 
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("test", test_command))
-    application.add_handler(CommandHandler("shutdown", shutdown))
+    # Add handlers with explicit filters
+    application.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("test", test_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("debug", debug, filters=filters.User(OWNER_ID)))
     application.add_handler(CallbackQueryHandler(handle_answer, pattern=r"^ans_"))
 
-    # Maintenance jobs
-    application.job_queue.run_repeating(maintenance_job, interval=300, first=10)
-    application.job_queue.run_repeating(heartbeat, interval=3600)  # Every hour
+    # Configure jobs with unique IDs
+    application.job_queue.run_repeating(
+        maintenance_job,
+        interval=300,
+        first=10,
+        name="Maintenance"
+    )
+    application.job_queue.run_repeating(
+        heartbeat,
+        interval=60,  # 1 minute heartbeat
+        first=5,
+        name="Heartbeat"
+    )
 
-    # Handle graceful shutdown on SIGINT or SIGTERM
-    def signal_handler(signum, frame):
-        logger.info(f"Received signal {signum}, shutting down gracefully...")
-        application.stop()
-        application.shutdown()
-        sys.exit(0)
+    # Webhook verification
+    async def post_init(application: Application):
+        await application.bot.set_webhook(WEBHOOK_URL)
+        logger.info("Webhook configured successfully")
+        logger.info(f"Current jobs: {application.job_queue.jobs()}")
 
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    application.post_init(post_init)
 
-    # Webhook setup
+    # Error handling
+    application.add_error_handler(lambda update, context: logger.error(f"Update {update} caused error: {context.error}"))
+
+    # Start the bot
     application.run_webhook(
         listen="0.0.0.0",
         port=int(os.environ.get("PORT", 5000)),
