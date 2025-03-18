@@ -86,8 +86,12 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     answered_users.add(user_id)
-    user_answer = query.data.strip().lower()
-    correct_answer = current_question.get("answer", "").strip().lower()
+    user_answer = query.data.strip()
+    correct_answer = current_question.get("answer", "").strip()
+
+    logger.info(f"User answer: '{user_answer}'")
+    logger.info(f"Correct answer: '{correct_answer}'")
+
     correct = user_answer == correct_answer
 
     if correct:
