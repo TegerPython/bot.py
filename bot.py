@@ -51,7 +51,42 @@ current_question = None
 current_message_id = None
 
 async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> bool:
-    # ... (send_question remains the same)
+    global current_question, answered_users, current_message_id
+    answered_users = set()
+
+    if not questions:
+        logger.error("No questions available.")
+        return False
+
+    if is_test:
+        current_question = random.choice(questions)
+    else:
+        current_question = questions[datetime.now().day % len(questions)]
+
+    logger.info(f"send_question called, is_test: {is_test}, question: {current_question.get('question')}")
+    keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in current_question.get("options", [])]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    try:
+        message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=f"📝 {'Test' if is_test else 'Daily'} Challenge:\n\n{current_question.get('question')}",
+            reply_markup=reply_markup,
+            disable_web_page_preview=True,
+            disable_notification=False,
+        )
+
+        if message and message.message_id:
+            current_message_id = message.message_id
+            logger.info("send_question: message sent successfully")
+            return True
+        else:
+            logger.info("send_question: message sending failed")
+            return False
+
+    except Exception as e:
+        logger.error(f"send_question: Failed to send question: {e}")
+        return False
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     global answered_users, current_question, current_message_id, leaderboard
@@ -99,13 +134,28 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await query.answer("❌ Incorrect.")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (heartbeat remains the same)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
 
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (test_question remains the same)
+    logger.info(f"test_question called by user ID: {update.effective_user.id}")
+    logger.info(f"OWNER_ID: {OWNER_ID}")
+    if update.effective_user.id != OWNER_ID:
+        logger.info("test_question: user not authorized")
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+
+    if await send_question(context, is_test=True):
+        await update.message.reply_text("✅ Test question sent.")
+    else:
+        await update.message.reply_text("❌ Failed to send test question.")
 
 async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (set_webhook remains the same)
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    await context.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}")
+    await update.message.reply_text("✅ Webhook refreshed.")
 
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
@@ -115,7 +165,9 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(leaderboard_text)
 
 def get_utc_time(hour, minute, tz_name):
-    # ... (get_utc_time remains the same)
+    tz = pytz.timezone(tz_name)
+    local_time = tz.localize(datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0))
+    return local_time.astimezone(pytz.utc).time()
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
@@ -128,17 +180,4 @@ def main():
     job_queue.run_repeating(heartbeat, interval=60)
 
     application.add_handler(CommandHandler("test", test_question))
-    application.add_handler(CallbackQueryHandler(handle_answer))
-    application.add_handler(CommandHandler("setwebhook", set_webhook))
-    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
-
-    port = int(os.environ.get("PORT", 5000))
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=BOT_TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-    )
-
-if __name__ == "__main__":
-    main()
+    application.add
