@@ -1,5 +1,6 @@
 import os
 import logging
+import requests
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -9,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 # Environment Variables
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+CHANNEL_ID = os.getenv("CHANNEL_ID")  # Note: CHANNEL_ID should be a string here
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
@@ -22,18 +23,24 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         logger.info(f"Attempting to send message to channel {CHANNEL_ID}")
-        message = await context.bot.send_message(
-            chat_id=CHANNEL_ID, text="This is a test message from the bot."
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": CHANNEL_ID,
+            "text": "This is a test message from the bot (using requests).",
+        }
+        response = requests.post(url, json=payload)
+        response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
+
+        logger.info("Message sent successfully (using requests)")
+        await update.message.reply_text("✅ Test message sent to channel (using requests).")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error sending message (using requests): {e}")
+        await update.message.reply_text(
+            f"❌ Failed to send test message (using requests): {e}"
         )
-        if message and message.message_id:
-            logger.info("Message sent successfully")
-            await update.message.reply_text("✅ Test message sent to channel.")
-        else:
-            logger.info("Message sending failed: No message or message ID")
-            await update.message.reply_text("❌ Failed to send test message.")
     except Exception as e:
-        logger.error(f"Error sending message: {e}")
-        await update.message.reply_text(f"❌ Failed to send test message: {e}")
+        logger.error(f"Error: unexpected error: {e}")
+        await update.message.reply_text(f"❌ unexpected error, check logs")
 
 async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
