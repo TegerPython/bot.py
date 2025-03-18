@@ -17,12 +17,12 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL") # Get the questions URL
+QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
 
 # Load Questions from URL
 try:
     response = requests.get(QUESTIONS_JSON_URL)
-    response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+    response.raise_for_status()
     questions = response.json()
     logger.info(f"Loaded {len(questions)} questions from {QUESTIONS_JSON_URL}")
 except requests.exceptions.RequestException as e:
@@ -40,7 +40,7 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> bo
     global current_question, answered_users, current_message_id
     answered_users = set()
 
-    if not questions: # added check for empty questions list.
+    if not questions:
         logger.error("No questions available.")
         return False
 
@@ -49,14 +49,14 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> bo
     else:
         current_question = questions[datetime.now().day % len(questions)]
 
-    logger.info(f"send_question called, is_test: {is_test}, question: {current_question['question']}")
-    keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in current_question["options"]]
+    logger.info(f"send_question called, is_test: {is_test}, question: {current_question.get('question')}") # Added get() to avoid KeyError
+    keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in current_question.get("options", [])] # Added get()
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
         message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
-            text=f"📝 {'Test' if is_test else 'Daily'} Challenge:\n\n{current_question['question']}",
+            text=f"📝 {'Test' if is_test else 'Daily'} Challenge:\n\n{current_question.get('question')}", # Added get()
             reply_markup=reply_markup,
             disable_web_page_preview=True,
             disable_notification=False,
@@ -87,7 +87,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     answered_users.add(user_id)
     user_answer = query.data
-    correct = user_answer == current_question["answer"]
+    correct = user_answer == current_question.get("answer") # Added get()
 
     if correct:
         await query.answer("✅ Correct!")
@@ -95,8 +95,8 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         explanation = current_question.get("explanation", "No explanation provided.")
         edited_text = (
             "📝 Daily Challenge (Answered)\n\n"
-            f"Question: {current_question['question']}\n"
-            f"✅ Correct Answer: {current_question['answer']}\n"
+            f"Question: {current_question.get('question')}\n" # Added get()
+            f"✅ Correct Answer: {current_question.get('answer')}\n" # Added get()
             f"ℹ️ Explanation: {explanation}\n\n"
             f"🏆 Winner: {username}"
         )
