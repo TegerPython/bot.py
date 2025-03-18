@@ -1,4 +1,4 @@
-python-telegram-bot[webhooks]
+python-telegram-bot[webhooks]~=20.7
 requests
 Flask>=2.0.0
 pytz
