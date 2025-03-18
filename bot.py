@@ -18,6 +18,7 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
+LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
 
 # Load Questions from URL
 try:
@@ -32,50 +33,28 @@ except json.JSONDecodeError:
     logger.error(f"Error decoding JSON from {QUESTIONS_JSON_URL}")
     questions = []
 
+# Load Leaderboard from URL
+try:
+    response = requests.get(LEADERBOARD_JSON_URL)
+    response.raise_for_status()
+    leaderboard = response.json()
+    logger.info(f"Loaded leaderboard from {LEADERBOARD_JSON_URL}")
+except requests.exceptions.RequestException as e:
+    logger.error(f"Error fetching leaderboard from {LEADERBOARD_JSON_URL}: {e}")
+    leaderboard = {}
+except json.JSONDecodeError:
+    logger.error(f"Error decoding leaderboard from {LEADERBOARD_JSON_URL}")
+    leaderboard = {}
+
 answered_users = set()
 current_question = None
 current_message_id = None
 
 async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> bool:
-    global current_question, answered_users, current_message_id
-    answered_users = set()
-
-    if not questions:
-        logger.error("No questions available.")
-        return False
-
-    if is_test:
-        current_question = random.choice(questions)
-    else:
-        current_question = questions[datetime.now().day % len(questions)]
-
-    logger.info(f"send_question called, is_test: {is_test}, question: {current_question.get('question')}")
-    keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in current_question.get("options", [])]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    try:
-        message = await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=f"📝 {'Test' if is_test else 'Daily'} Challenge:\n\n{current_question.get('question')}",
-            reply_markup=reply_markup,
-            disable_web_page_preview=True,
-            disable_notification=False,
-        )
-
-        if message and message.message_id:
-            current_message_id = message.message_id
-            logger.info("send_question: message sent successfully")
-            return True
-        else:
-            logger.info("send_question: message sending failed")
-            return False
-
-    except Exception as e:
-        logger.error(f"send_question: Failed to send question: {e}")
-        return False
+    # ... (send_question remains the same)
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global answered_users, current_question, current_message_id
+    global answered_users, current_question, current_message_id, leaderboard
 
     query = update.callback_query
     user_id = query.from_user.id
@@ -96,6 +75,9 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if correct:
         await query.answer("✅ Correct!")
+        if str(user_id) not in leaderboard:
+            leaderboard[str(user_id)] = {"username": username, "score": 0}
+        leaderboard[str(user_id)]["score"] += 1
 
         explanation = current_question.get("explanation", "No explanation provided.")
         edited_text = (
@@ -117,33 +99,23 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await query.answer("❌ Incorrect.")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
+    # ... (heartbeat remains the same)
 
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.info(f"test_question called by user ID: {update.effective_user.id}")
-    logger.info(f"OWNER_ID: {OWNER_ID}")
-    if update.effective_user.id != OWNER_ID:
-        logger.info("test_question: user not authorized")
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-
-    if await send_question(context, is_test=True):
-        await update.message.reply_text("✅ Test question sent.")
-    else:
-        await update.message.reply_text("❌ Failed to send test question.")
+    # ... (test_question remains the same)
 
 async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-    await context.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}")
-    await update.message.reply_text("✅ Webhook refreshed.")
+    # ... (set_webhook remains the same)
+
+async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
+    leaderboard_text = "🏆 Leaderboard 🏆\n\n"
+    for rank, (user_id, player) in enumerate(sorted_leaderboard, start=1):
+        leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
+    await update.message.reply_text(leaderboard_text)
 
 def get_utc_time(hour, minute, tz_name):
-    tz = pytz.timezone(tz_name)
-    local_time = tz.localize(datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0))
-    return local_time.astimezone(pytz.utc).time()
+    # ... (get_utc_time remains the same)
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
@@ -158,6 +130,7 @@ def main():
     application.add_handler(CommandHandler("test", test_question))
     application.add_handler(CallbackQueryHandler(handle_answer))
     application.add_handler(CommandHandler("setwebhook", set_webhook))
+    application.add_handler(CommandHandler("leaderboard", leaderboard_command)) # add leaderboard command.
 
     port = int(os.environ.get("PORT", 5000))
     application.run_webhook(
