@@ -15,16 +15,21 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_answer == question_data["answer"]:
             response = "✅ Correct!"
         else:
+            # Retrieve explanation from the QUESTIONS list
             explanation = next(
-                (q.get('explanation', '') 
-                for q in QUESTIONS 
-                if q['question'] == question_data['question']
-            ), 'No explanation available'
+                (q.get("explanation", "No explanation available")
+                 for q in QUESTIONS
+                 if q["question"] == question_data["question"]),
+                "No explanation available"
+            )
             response = (
                 f"❌ Incorrect. Correct answer: {question_data['answer']}\n"
                 f"📖 Explanation: {explanation}"
             )
 
-        await query.edit_message_text(text=f"{query.message.text}\n\n{response}", reply_markup=None)
+        await query.edit_message_text(
+            text=f"{query.message.text}\n\n{response}",
+            reply_markup=None
+        )
     except Exception as e:
         logger.error(f"Error handling answer: {str(e)}")
