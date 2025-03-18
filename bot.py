@@ -1,6 +1,8 @@
 import os
 import logging
 import random
+import json
+import requests
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue
@@ -15,12 +17,20 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL") # Get the questions URL
 
-# Questions
-questions = [
-    {"question": "What is the capital of France?", "options": ["Berlin", "Madrid", "Paris", "Rome"], "answer": "Paris", "explanation": "Paris is the capital city of France."},
-    {"question": "2 + 2 equals?", "options": ["3", "4", "5", "6"], "answer": "4", "explanation": "Simple math!"}
-]
+# Load Questions from URL
+try:
+    response = requests.get(QUESTIONS_JSON_URL)
+    response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+    questions = response.json()
+    logger.info(f"Loaded {len(questions)} questions from {QUESTIONS_JSON_URL}")
+except requests.exceptions.RequestException as e:
+    logger.error(f"Error fetching questions from {QUESTIONS_JSON_URL}: {e}")
+    questions = []
+except json.JSONDecodeError:
+    logger.error(f"Error decoding JSON from {QUESTIONS_JSON_URL}")
+    questions = []
 
 answered_users = set()
 current_question = None
@@ -29,6 +39,10 @@ current_message_id = None
 async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> bool:
     global current_question, answered_users, current_message_id
     answered_users = set()
+
+    if not questions: # added check for empty questions list.
+        logger.error("No questions available.")
+        return False
 
     if is_test:
         current_question = random.choice(questions)
@@ -61,70 +75,19 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> bo
         return False
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global answered_users, current_question, current_message_id
-
-    query = update.callback_query
-    user_id = query.from_user.id
-    username = query.from_user.first_name
-
-    if user_id in answered_users:
-        await query.answer("❌ You already answered this question.")
-        return
-
-    answered_users.add(user_id)
-    user_answer = query.data
-    correct = user_answer == current_question["answer"]
-
-    if correct:
-        await query.answer("✅ Correct!")
-
-        explanation = current_question.get("explanation", "No explanation provided.")
-        edited_text = (
-            "📝 Daily Challenge (Answered)\n\n"
-            f"Question: {current_question['question']}\n"
-            f"✅ Correct Answer: {current_question['answer']}\n"
-            f"ℹ️ Explanation: {explanation}\n\n"
-            f"🏆 Winner: {username}"
-        )
-        try:
-            await context.bot.edit_message_text(
-                chat_id=CHANNEL_ID,
-                message_id=current_message_id,
-                text=edited_text
-            )
-        except Exception as e:
-            logger.error(f"Failed to edit message: {e}")
-    else:
-        await query.answer("❌ Incorrect.")
+    # ... (handle_answer remains the same)
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
+    # ... (heartbeat remains the same)
 
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.info(f"test_question called by user ID: {update.effective_user.id}")
-    logger.info(f"OWNER_ID: {OWNER_ID}")
-    if update.effective_user.id != OWNER_ID:
-        logger.info("test_question: user not authorized")
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-
-    if await send_question(context, is_test=True):
-        await update.message.reply_text("✅ Test question sent.")
-    else:
-        await update.message.reply_text("❌ Failed to send test question.")
+    # ... (test_question remains the same)
 
 async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-    await context.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}")
-    await update.message.reply_text("✅ Webhook refreshed.")
+    # ... (set_webhook remains the same)
 
 def get_utc_time(hour, minute, tz_name):
-    tz = pytz.timezone(tz_name)
-    local_time = tz.localize(datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0))
-    return local_time.astimezone(pytz.utc).time()
+    # ... (get_utc_time remains the same)
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
