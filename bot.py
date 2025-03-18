@@ -35,16 +35,22 @@ except json.JSONDecodeError:
     questions = []
 
 # Load Leaderboard from URL
+# Load Leaderboard from URL
 try:
+    logger.info(f"Attempting to fetch leaderboard from: {LEADERBOARD_JSON_URL}")
     response = requests.get(LEADERBOARD_JSON_URL)
     response.raise_for_status()
+    logger.info("Leaderboard fetch successful. Attempting to decode JSON.")
     leaderboard = response.json()
-    logger.info(f"Loaded leaderboard from {LEADERBOARD_JSON_URL}")
+    logger.info(f"Loaded leaderboard: {leaderboard}")
 except requests.exceptions.RequestException as e:
     logger.error(f"Error fetching leaderboard from {LEADERBOARD_JSON_URL}: {e}")
     leaderboard = {}
 except json.JSONDecodeError:
-    logger.error(f"Error decoding leaderboard from {LEADERBOARD_JSON_URL}")
+    logger.error(f"Error decoding leaderboard from {LEADERBOARD_JSON_URL}: {e}")
+    leaderboard = {}
+except Exception as e:
+    logger.error(f"Unexpected error loading leaderboard: {e}")
     leaderboard = {}
 
 answered_users = set()
