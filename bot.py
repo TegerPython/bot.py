@@ -3,7 +3,7 @@ import logging
 import random
 import json
 import requests
-import time  # Import time for delay
+import time
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue
@@ -160,11 +160,15 @@ async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
+        logger.info(f"Leaderboard data: {leaderboard}")
         sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
         leaderboard_text = "🏆 Leaderboard 🏆\n\n"
         for rank, (user_id, player) in enumerate(sorted_leaderboard, start=1):
             leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
         await update.message.reply_text(leaderboard_text)
+    except KeyError as e:
+        logger.error(f"Error in leaderboard_command: KeyError - {e}")
+        await update.message.reply_text("❌ Failed to display leaderboard due to data error.")
     except Exception as e:
         logger.error(f"Error in leaderboard_command: {e}")
         await update.message.reply_text("❌ Failed to display leaderboard.")
@@ -190,7 +194,7 @@ def main():
     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
 
     port = int(os.environ.get("PORT", 5000))
-    logger.info(f"Starting bot on port {port}") # Startup message
+    logger.info(f"Starting bot on port {port}")
     application.run_webhook(
         listen="0.0.0.0",
         port=port,
