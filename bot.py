@@ -116,13 +116,29 @@ async def heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
 
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (test_question remains the same)
+    logger.info(f"test_question called by user ID: {update.effective_user.id}")
+    logger.info(f"OWNER_ID: {OWNER_ID}")
+    if update.effective_user.id != OWNER_ID:
+        logger.info("test_question: user not authorized")
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+
+    if await send_question(context, is_test=True):
+        await update.message.reply_text("✅ Test question sent.")
+    else:
+        await update.message.reply_text("❌ Failed to send test question.")
 
 async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (set_webhook remains the same)
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    await context.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}")
+    await update.message.reply_text("✅ Webhook refreshed.")
 
 def get_utc_time(hour, minute, tz_name):
-    # ... (get_utc_time remains the same)
+    tz = pytz.timezone(tz_name)
+    local_time = tz.localize(datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0))
+    return local_time.astimezone(pytz.utc).time()
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
