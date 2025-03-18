@@ -9,6 +9,33 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue
 import pytz
 
+import os
+import logging
+import random
+import json
+import requests
+import time
+from datetime import datetime
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue
+import pytz
+
+# Logging setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Environment Variables
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+logger.info(f"BOT_TOKEN: {BOT_TOKEN}") #add this line.
+
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
+LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
+WEEKLY_QUESTIONS_JSON_URL = os.getenv("WEEKLY_QUESTIONS_JSON_URL")
+
+# ... rest of your code ...
 # ... (rest of your code, including functions) ...
 
 def main():
