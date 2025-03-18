@@ -4,7 +4,7 @@ import random
 import json
 import requests
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue
 import pytz
@@ -60,7 +60,7 @@ def load_leaderboard():
     except requests.exceptions.RequestException as e:
         logger.error(f"Error fetching leaderboard from {LEADERBOARD_JSON_URL}: {e}")
     except json.JSONDecodeError:
-        logger.error(f"Error decoding JSON from {LEADERBOARD_JSON_URL}")
+        logger.error(f"Error decoding leaderboard from {LEADERBOARD_JSON_URL}")
     except Exception as e:
         logger.error(f"Error loading leaderboard: {e}")
 
@@ -221,7 +221,22 @@ def main():
     job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
     job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
     job_queue.run_daily(send_question, get_utc_time(18, 0, "Asia/Gaza"))
-    job_queue.run_weekly(send_weekly_questionnaire, datetime.time(18, 0, 0), days=(5,)) # Friday at 6 PM
+
+    friday = 4  # Monday is 0, Tuesday is 1, ..., Friday is 4
+    now = datetime.now(pytz.utc)
+    target_time = get_utc_time(18, 0, "Asia/Gaza")
+    target_datetime = datetime.combine(now.date(), target_time).replace(tzinfo=pytz.utc)
+
+    days_ahead = (friday - now.weekday() + 7) % 7
+    next_friday = now + timedelta(days=days_ahead)
+    next_friday_at_target_time = datetime.combine(next_friday.date(), target_time).replace(tzinfo=pytz.utc)
+
+    job_queue.run_daily(
+        send_weekly_questionnaire,
+        time=next_friday_at_target_time.time(),
+        days=(friday,),
+        name="weekly_questionnaire"
+    )
 
     job_queue.run_repeating(heartbeat, interval=60)
 
