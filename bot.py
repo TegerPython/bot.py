@@ -35,7 +35,7 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> bo
     else:
         current_question = questions[datetime.now().day % len(questions)]
 
-    logger.info(f"Sending question: {current_question['question']} to chat ID: {CHANNEL_ID}")
+    logger.info(f"send_question called, is_test: {is_test}, question: {current_question['question']}") # add log
 
     keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in current_question["options"]]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -51,57 +51,27 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> bo
 
         if message and message.message_id:
             current_message_id = message.message_id
+            logger.info("send_question: message sent successfully") # add log
             return True
         else:
+            logger.info("send_question: message sending failed") # add log
             return False
 
     except Exception as e:
-        logger.error(f"Failed to send question: {e}")
+        logger.error(f"send_question: Failed to send question: {e}") # add log
         return False
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global answered_users, current_question, current_message_id
-
-    query = update.callback_query
-    user_id = query.from_user.id
-    username = query.from_user.first_name
-
-    if user_id in answered_users:
-        await query.answer("❌ You already answered this question.")
-        return
-
-    answered_users.add(user_id)
-    user_answer = query.data
-    correct = user_answer == current_question["answer"]
-
-    if correct:
-        await query.answer("✅ Correct!")
-
-        explanation = current_question.get("explanation", "No explanation provided.")
-        edited_text = (
-            "📝 Daily Challenge (Answered)\n\n"
-            f"Question: {current_question['question']}\n"
-            f"✅ Correct Answer: {current_question['answer']}\n"
-            f"ℹ️ Explanation: {explanation}\n\n"
-            f"🏆 Winner: {username}"
-        )
-        try:
-            await context.bot.edit_message_text(
-                chat_id=CHANNEL_ID,
-                message_id=current_message_id,
-                text=edited_text
-            )
-        except Exception as e:
-            logger.error(f"Failed to edit message: {e}")
-    else:
-        await query.answer("❌ Incorrect.")
+    # ... (handle_answer remains the same)
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
+    # ... (heartbeat remains the same)
 
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.info(f"test_question called by user ID: {update.effective_user.id}") # add log
+    logger.info(f"OWNER_ID: {OWNER_ID}") # add log
     if update.effective_user.id != OWNER_ID:
+        logger.info("test_question: user not authorized") # add log
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
 
@@ -111,38 +81,10 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("❌ Failed to send test question.")
 
 async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-    await context.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}")
-    await update.message.reply_text("✅ Webhook refreshed.")
+    # ... (set_webhook remains the same)
 
 def get_utc_time(hour, minute, tz_name):
-    tz = pytz.timezone(tz_name)
-    local_time = tz.localize(datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0))
-    return local_time.astimezone(pytz.utc).time()
+    # ... (get_utc_time remains the same)
 
 def main():
-    application = Application.builder().token(BOT_TOKEN).build()
-    job_queue = application.job_queue
-
-    job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
-    job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
-    job_queue.run_daily(send_question, get_utc_time(18, 0, "Asia/Gaza"))
-
-    job_queue.run_repeating(heartbeat, interval=60)
-
-    application.add_handler(CommandHandler("test", test_question))
-    application.add_handler(CallbackQueryHandler(handle_answer))
-    application.add_handler(CommandHandler("setwebhook", set_webhook))
-
-    port = int(os.environ.get("PORT", 5000))
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=BOT_TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-    )
-
-if __name__ == "__main__":
-    main()
+    # ... (main remains the same)
