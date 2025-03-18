@@ -21,44 +21,49 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
 LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
 
-# Load Questions from URL
-try:
-    response = requests.get(QUESTIONS_JSON_URL)
-    response.raise_for_status()
-    questions = response.json()
-    logger.info(f"Loaded {len(questions)} questions from {QUESTIONS_JSON_URL}")
-except requests.exceptions.RequestException as e:
-    logger.error(f"Error fetching questions from {QUESTIONS_JSON_URL}: {e}")
-    questions = []
-except json.JSONDecodeError:
-    logger.error(f"Error decoding JSON from {QUESTIONS_JSON_URL}")
-    questions = []
-
-# Load Leaderboard from URL
-# Load Leaderboard from URL
-try:
-    logger.info(f"Attempting to fetch leaderboard from: {LEADERBOARD_JSON_URL}")
-    response = requests.get(LEADERBOARD_JSON_URL)
-    response.raise_for_status()
-    logger.info("Leaderboard fetch successful. Attempting to decode JSON.")
-    leaderboard = response.json()
-    logger.info(f"Loaded leaderboard: {leaderboard}")
-except requests.exceptions.RequestException as e:
-    logger.error(f"Error fetching leaderboard from {LEADERBOARD_JSON_URL}: {e}")
-    leaderboard = {}
-except json.JSONDecodeError:
-    logger.error(f"Error decoding leaderboard from {LEADERBOARD_JSON_URL}: {e}")
-    leaderboard = {}
-except Exception as e:
-    logger.error(f"Unexpected error loading leaderboard: {e}")
-    leaderboard = {}
-
+# Global variables
+questions = []
+leaderboard = {}
 answered_users = set()
 current_question = None
 current_message_id = None
+question_index = 0  # Track the current question index
+
+# Load Questions from URL
+def load_questions():
+    global questions
+    try:
+        response = requests.get(QUESTIONS_JSON_URL)
+        response.raise_for_status()
+        questions = response.json()
+        logger.info(f"Loaded {len(questions)} questions from {QUESTIONS_JSON_URL}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching questions from {QUESTIONS_JSON_URL}: {e}")
+        questions = []
+    except json.JSONDecodeError:
+        logger.error(f"Error decoding JSON from {QUESTIONS_JSON_URL}")
+        questions = []
+
+# Load Leaderboard from URL
+def load_leaderboard():
+    global leaderboard
+    try:
+        response = requests.get(LEADERBOARD_JSON_URL)
+        response.raise_for_status()
+        leaderboard = response.json()
+        logger.info(f"Loaded leaderboard from {LEADERBOARD_JSON_URL}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching leaderboard from {LEADERBOARD_JSON_URL}: {e}")
+        leaderboard = {}
+    except json.JSONDecodeError:
+        logger.error(f"Error decoding leaderboard from {LEADERBOARD_JSON_URL}")
+        leaderboard = {}
+
+load_questions()
+load_leaderboard()
 
 async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> bool:
-    global current_question, answered_users, current_message_id
+    global current_question, answered_users, current_message_id, question_index
     answered_users = set()
 
     if not questions:
@@ -68,7 +73,11 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> bo
     if is_test:
         current_question = random.choice(questions)
     else:
-        current_question = questions[datetime.now().day % len(questions)]
+        if question_index >= len(questions):
+            logger.info("All questions have been posted.")
+            return False
+        current_question = questions[question_index]
+        question_index += 1
 
     logger.info(f"send_question called, is_test: {is_test}, question: {current_question.get('question')}")
     keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in current_question.get("options", [])]
@@ -142,7 +151,8 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
+    questions_left = len(questions) - question_index
+    await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}, Questions Left: {questions_left}")
 
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info(f"test_question called by user ID: {update.effective_user.id}")
