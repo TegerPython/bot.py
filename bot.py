@@ -3,6 +3,7 @@ import logging
 import random
 import json
 import requests
+import time  # Import time for delay
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue
@@ -18,7 +19,7 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
-LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL") # Added leaderboard URL
+LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
 
 # Load Questions from URL
 try:
@@ -89,7 +90,7 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> bo
         return False
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global answered_users, current_question, current_message_id, leaderboard # Added leaderboard
+    global answered_users, current_question, current_message_id, leaderboard
 
     query = update.callback_query
     user_id = query.from_user.id
@@ -158,19 +159,17 @@ async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text("✅ Webhook refreshed.")
 
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
-    leaderboard_text = "🏆 Leaderboard 🏆\n\n"
-    for rank, (user_id, player) in enumerate(sorted_leaderboard, start=1):
-        leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
-    await update.message.reply_text(leaderboard_text)
+    try:
+        sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
+        leaderboard_text = "🏆 Leaderboard 🏆\n\n"
+        for rank, (user_id, player) in enumerate(sorted_leaderboard, start=1):
+            leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
+        await update.message.reply_text(leaderboard_text)
+    except Exception as e:
+        logger.error(f"Error in leaderboard_command: {e}")
+        await update.message.reply_text("❌ Failed to display leaderboard.")
 
 def get_utc_time(hour, minute, tz_name):
     tz = pytz.timezone(tz_name)
     local_time = tz.localize(datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0))
-    return local_time.astimezone(pytz.utc).time()
-
-def main():
-    application = Application.builder().token(BOT_TOKEN).build()
-    job_queue = application.job_queue
-
-    job_
+    return local_time.astimezone
