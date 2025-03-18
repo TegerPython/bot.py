@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 WEEKLY_QUESTIONS_JSON_URL = os.getenv("WEEKLY_QUESTIONS_JSON_URL")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL") #add this line
 
 # Global variables
 weekly_questions = []
@@ -83,8 +84,13 @@ async def main():
 
     application.add_handler(CommandHandler("testweekly", test_weekly))
 
-    await application.start_polling()
-    await application.idle()
+    port = int(os.environ.get("PORT", 5000))  # Get the port from the environment
+    await application.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=BOT_TOKEN,
+        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}", #use your webhook url here.
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
