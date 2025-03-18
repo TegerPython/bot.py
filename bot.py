@@ -18,7 +18,7 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
-LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
+LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL") # Added leaderboard URL
 
 # Load Questions from URL
 try:
@@ -89,7 +89,7 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> bo
         return False
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global answered_users, current_question, current_message_id, leaderboard
+    global answered_users, current_question, current_message_id, leaderboard # Added leaderboard
 
     query = update.callback_query
     user_id = query.from_user.id
@@ -173,11 +173,4 @@ def main():
     application = Application.builder().token(BOT_TOKEN).build()
     job_queue = application.job_queue
 
-    job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
-    job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
-    job_queue.run_daily(send_question, get_utc_time(18, 0, "Asia/Gaza"))
-
-    job_queue.run_repeating(heartbeat, interval=60)
-
-    application.add_handler(CommandHandler("test", test_question))
-    application.add
+    job_
