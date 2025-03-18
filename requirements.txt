@@ -1,5 +1,5 @@
 python-telegram-bot[webhooks]
-
+requests
 Flask>=2.0.0
 pytz
 Werkzeug==2.2.3
