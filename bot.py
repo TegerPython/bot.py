@@ -172,4 +172,31 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 def get_utc_time(hour, minute, tz_name):
     tz = pytz.timezone(tz_name)
     local_time = tz.localize(datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0))
-    return local_time.astimezone
+    return local_time.astimezone(pytz.utc).time()
+
+def main():
+    application = Application.builder().token(BOT_TOKEN).build()
+    job_queue = application.job_queue
+
+    job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
+    job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
+    job_queue.run_daily(send_question, get_utc_time(18, 0, "Asia/Gaza"))
+
+    job_queue.run_repeating(heartbeat, interval=60)
+
+    application.add_handler(CommandHandler("test", test_question))
+    application.add_handler(CallbackQueryHandler(handle_answer))
+    application.add_handler(CommandHandler("setwebhook", set_webhook))
+    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
+
+    port = int(os.environ.get("PORT", 5000))
+    logger.info(f"Starting bot on port {port}") # Startup message
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=BOT_TOKEN,
+        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+    )
+
+if __name__ == "__main__":
+    main()
