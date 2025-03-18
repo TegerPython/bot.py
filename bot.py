@@ -75,10 +75,45 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE, is_test=False) -> bo
         return False
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (handle_answer remains the same)
+    global answered_users, current_question, current_message_id
+
+    query = update.callback_query
+    user_id = query.from_user.id
+    username = query.from_user.first_name
+
+    if user_id in answered_users:
+        await query.answer("❌ You already answered this question.")
+        return
+
+    answered_users.add(user_id)
+    user_answer = query.data
+    correct = user_answer == current_question["answer"]
+
+    if correct:
+        await query.answer("✅ Correct!")
+
+        explanation = current_question.get("explanation", "No explanation provided.")
+        edited_text = (
+            "📝 Daily Challenge (Answered)\n\n"
+            f"Question: {current_question['question']}\n"
+            f"✅ Correct Answer: {current_question['answer']}\n"
+            f"ℹ️ Explanation: {explanation}\n\n"
+            f"🏆 Winner: {username}"
+        )
+        try:
+            await context.bot.edit_message_text(
+                chat_id=CHANNEL_ID,
+                message_id=current_message_id,
+                text=edited_text
+            )
+        except Exception as e:
+            logger.error(f"Failed to edit message: {e}")
+    else:
+        await query.answer("❌ Incorrect.")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (heartbeat remains the same)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
 
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # ... (test_question remains the same)
