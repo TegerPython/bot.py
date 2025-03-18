@@ -130,7 +130,7 @@ def main():
     application.add_handler(CommandHandler("test", test_question))
     application.add_handler(CallbackQueryHandler(handle_answer))
     application.add_handler(CommandHandler("setwebhook", set_webhook))
-    application.add_handler(CommandHandler("leaderboard", leaderboard_command)) # add leaderboard command.
+    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
 
     port = int(os.environ.get("PORT", 5000))
     application.run_webhook(
