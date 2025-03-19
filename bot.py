@@ -62,8 +62,10 @@ async def handle_weekly_poll_answer(update: Update, context: ContextTypes.DEFAUL
         return
     if user_id not in weekly_user_answers:
         weekly_user_answers[user_id] = {"correct_answers": 0, "username": update.effective_user.first_name}
-    if poll.options[poll.correct_option_id].voter_count > 0:
-        weekly_user_answers[user_id]["correct_answers"] += 1
+    for option in poll.options:
+        if option.voter_count > 0 and poll.options.index(option) == poll.correct_option_id:
+            weekly_user_answers[user_id]["correct_answers"] += 1
+            break # only one correct answer
 
 async def send_weekly_results(context: ContextTypes.DEFAULT_TYPE):
     results = sorted(weekly_user_answers.items(), key=lambda item: item[1]["correct_answers"], reverse=True)
