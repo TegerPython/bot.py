@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
-APP_NAME = os.getenv("RENDER_APP_NAME") # for render url.
+APP_NAME = os.getenv("RENDER_APP_NAME")
 TELEGRAM_SECRET_TOKEN = os.getenv("TELEGRAM_SECRET_TOKEN")
 
 # Global variables
@@ -77,9 +77,16 @@ async def send_weekly_results(context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=CHANNEL_ID, text=message)
 
 async def test_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info("test_weekly command received") #added log
+    logger.info(f"Update.effective_user.id: {update.effective_user.id}") #added log
+    logger.info(f"OWNER_ID: {OWNER_ID}") #added log
+
     if update.effective_user.id != OWNER_ID:
+        logger.info("Unauthorized user") #added log
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
+
+    logger.info("Authorized user, sending weekly questionnaire") #added log
     await send_weekly_questionnaire(context)
 
 async def handle_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -98,7 +105,7 @@ def main():
         listen="0.0.0.0",
         port=PORT,
         webhook_url=f"https://{APP_NAME}.onrender.com/{BOT_TOKEN}",
-        secret_token = TELEGRAM_SECRET_TOKEN
+        secret_token=TELEGRAM_SECRET_TOKEN
     )
 
 if __name__ == "__main__":
