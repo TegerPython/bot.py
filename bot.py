@@ -29,11 +29,13 @@ WEEKLY_QUESTIONS_JSON_URL = os.getenv("WEEKLY_QUESTIONS_JSON_URL")
 questions = []
 leaderboard = {}
 current_question = None
+current_message_id = None
 user_answers = {}
 weekly_questions = []
 weekly_question_index = 0
 weekly_poll_message_ids = []
 weekly_user_answers = {}
+answered_users = set()
 
 # Load Questions from URL
 def load_questions():
@@ -85,34 +87,74 @@ load_leaderboard()
 load_weekly_questions()
 
 async def send_question(context: ContextTypes.DEFAULT_TYPE):
-    global current_question, user_answers
+    global current_question, answered_users, current_message_id
+    answered_users = set()
     current_question = random.choice(questions)
-    user_answers = {}
-    keyboard = [[InlineKeyboardButton(option, callback_data=str(i)) for i, option in enumerate(current_question["options"])]]
+    keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in current_question.get("options", [])]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await context.bot.send_message(chat_id=CHANNEL_ID, text=current_question["question"], reply_markup=reply_markup)
+
+    try:
+        message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=current_question.get("question"),
+            reply_markup=reply_markup,
+            disable_web_page_preview=True,
+            disable_notification=False,
+        )
+        if message and message.message_id:
+            current_message_id = message.message_id
+            logger.info("send_question: message sent successfully")
+        else:
+            logger.info("send_question: message sending failed")
+
+    except Exception as e:
+        logger.error(f"send_question: Failed to send question: {e}")
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global answered_users, current_question, current_message_id, leaderboard
+
     query = update.callback_query
     user_id = query.from_user.id
-    username = query.from_user.username or query.from_user.first_name
-    answer = int(query.data)
+    username = query.from_user.first_name
 
-    if current_question:
-        if user_id not in user_answers:
-            user_answers[user_id] = answer
-            if answer == current_question["correct_option"]:
-                if user_id not in leaderboard:
-                    leaderboard[user_id] = {"score": 0, "username": username}
-                leaderboard[user_id]["score"] += 1
-                await query.answer(text="✅ Correct!")
-            else:
-                await query.answer(text="❌ Incorrect.")
-        else:
-            await query.answer(text="You've already answered this question.")
-        save_leaderboard()
+    if user_id in answered_users:
+        await query.answer("❌ You already answered this question.")
+        return
+
+    answered_users.add(user_id)
+    user_answer = query.data.strip()
+    correct_answer = current_question.get("correct_option", "").strip()
+
+    logger.info(f"User answer: '{user_answer}'")
+    logger.info(f"Correct answer: '{correct_answer}'")
+
+    correct = user_answer == correct_answer
+
+    if correct:
+        await query.answer("✅ Correct!")
+        if str(user_id) not in leaderboard:
+            leaderboard[str(user_id)] = {"username": username, "score": 0}
+        leaderboard[str(user_id)]["score"] += 1
+
+        explanation = current_question.get("explanation", "No explanation provided.")
+        edited_text = (
+            "📝 Daily Challenge (Answered)\n\n"
+            f"Question: {current_question.get('question')}\n"
+            f"✅ Correct Answer: {current_question.get('correct_option')}\n"
+            f"ℹ️ Explanation: {explanation}\n\n"
+            f"🏆 Winner: {username}"
+        )
+        try:
+            await context.bot.edit_message_text(
+                chat_id=CHANNEL_ID,
+                message_id=current_message_id,
+                text=edited_text
+            )
+        except Exception as e:
+            logger.error(f"Failed to edit message: {e}")
     else:
-        await query.answer(text="No question available.")
+        await query.answer("❌ Incorrect.")
+    save_leaderboard()
 
 def save_leaderboard():
     try:
@@ -150,7 +192,8 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_question(context)
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
-    logger.info("Heartbeat: Bot is alive.")
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
 
 async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != OWNER_ID:
@@ -204,82 +247,4 @@ async def send_weekly_questionnaire(context: ContextTypes.DEFAULT_TYPE):
                 correct_option_id=question["correct_option"],
                 open_period=30  # 30 seconds
             )
-            weekly_poll_message_ids.append(message.message_id)
-            time.sleep(30)  # Wait for 30 seconds
-        except Exception as e:
-            logger.error(f"Error sending weekly poll {i + 1}: {e}")
-
-    weekly_question_index += 1  # Increment the index after sending 10 questions
-    context.job_queue.run_once(close_weekly_polls, 30 * 10)  # Close after 10 polls * 30 seconds
-
-async def close_weekly_polls(context: ContextTypes.DEFAULT_TYPE):
-    global weekly_poll_message_ids, weekly_user_answers
-    for message_id in weekly_poll_message_ids:
-        try:
-            await context.bot.stop_poll(chat_id=CHANNEL_ID, message_id=message_id)
-        except Exception as e:
-            logger.error(f"Error closing weekly poll {message_id}: {e}")
-
-async def handle_weekly_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    poll = update.poll
-    user_id = poll.voter_count
-    if poll.is_closed:
-        return
-    if user_id not in weekly_user_answers:
-        weekly_user_answers[user_id] = poll.options[poll.correct_option_id].voter_count
-    else:
-        weekly_user_answers[user_id] += poll.options[poll.correct_option_id].voter_count
-
-async def test_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_weekly_questionnaire(context)
-
-def get_utc_time(hour, minute, timezone_str):
-    tz = pytz.timezone(timezone_str)
-    local_time = datetime.now(tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
-    utc_time = local_time.astimezone(pytz.utc).time()
-    return utc_time
-
-def main():
-    application = Application.builder().token(BOT_TOKEN).build()
-    job_queue = application.job_queue
-
-    job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
-    job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
-    job_queue.run_daily(send_question, get_utc_time(18, 0, "Asia/Gaza"))
-
-    friday = 4  # Monday is 0, Tuesday is 1, ..., Friday is 4
-    now = datetime.now(pytz.utc)
-    target_time = get_utc_time(18, 0, "Asia/Gaza")
-    target_datetime = datetime.combine(now.date(), target_time).replace(tzinfo=pytz.utc)
-
-    days_ahead = (friday - now.weekday() + 7) % 7
-    next_friday = now + timedelta(days=days_ahead)
-    next_friday_at_target_time = datetime.combine(next_friday.date(), target_time).replace(tzinfo=pytz.utc)
-
-    job_queue.run_daily(
-        send_weekly_questionnaire,
-        time=next_friday_at_target_time.time(),
-        days=(friday,),
-        name="weekly_questionnaire"
-    )
-
-    job_queue.run_repeating(heartbeat, interval=60)
-
-    application.add_handler(CommandHandler("test", test_question))
-    application.add_handler(CallbackQueryHandler(handle_answer))
-    application.add_handler(CommandHandler("setwebhook", set_webhook))
-    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
-    application.add_handler(CallbackQueryHandler(handle_weekly_poll_answer))
-    application.add_handler(CommandHandler("testweekly", test_weekly))
-
-    port = int(os.environ.get("PORT", 5000))
-    logger.info(f"Starting bot on port {port}")
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=BOT_TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-    )
-
-if __name__ == "__main__":
-    main()
+            weekly_poll_message_ids.append(message.message
