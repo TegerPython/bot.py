@@ -1,11 +1,7 @@
 import os
 import logging
-import random
-import time
-from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue
-import pytz
+from telegram import Update, Poll
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -15,6 +11,8 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
+APP_NAME = os.getenv("RENDER_APP_NAME")
+TELEGRAM_SECRET_TOKEN = os.getenv("TELEGRAM_SECRET_TOKEN")
 
 # Global variables
 weekly_questions = [
@@ -22,12 +20,16 @@ weekly_questions = [
     {"question": "What is the capital of France?", "options": ["Berlin", "London", "Paris"], "correct_option": 2},
     {"question": "What is the largest planet?", "options": ["Earth", "Jupiter", "Mars"], "correct_option": 1},
 ]
-weekly_question_index = 0
 weekly_poll_message_ids = []
 weekly_user_answers = {}
 
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id, text="Bot is running."
+    )
+
 async def send_weekly_questionnaire(context: ContextTypes.DEFAULT_TYPE):
-    global weekly_poll_message_ids, weekly_user_answers, weekly_question_index
+    global weekly_poll_message_ids, weekly_user_answers
     weekly_poll_message_ids = []
     weekly_user_answers = {}
     for i, question in enumerate(weekly_questions):
@@ -41,19 +43,8 @@ async def send_weekly_questionnaire(context: ContextTypes.DEFAULT_TYPE):
                 open_period=5,  # 5 seconds for testing
             )
             weekly_poll_message_ids.append(message.message_id)
-            time.sleep(5)  # Wait for 5 seconds
         except Exception as e:
             logger.error(f"Error sending weekly poll {i + 1}: {e}")
-    context.job_queue.run_once(close_weekly_polls, 5 * len(weekly_questions))
-
-async def close_weekly_polls(context: ContextTypes.DEFAULT_TYPE):
-    global weekly_poll_message_ids
-    for message_id in weekly_poll_message_ids:
-        try:
-            await context.bot.stop_poll(chat_id=CHANNEL_ID, message_id=message_id)
-        except Exception as e:
-            logger.error(f"Error closing weekly poll {message_id}: {e}")
-    context.job_queue.run_once(send_weekly_results, 60) # one minute after the polls close.
 
 async def handle_weekly_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     poll = update.poll
@@ -85,19 +76,37 @@ async def send_weekly_results(context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=CHANNEL_ID, text=message)
 
 async def test_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info("test_weekly command received")
+    logger.info(f"Update.effective_user.id: {update.effective_user.id}")
+    logger.info(f"OWNER_ID: {OWNER_ID}")
+
     if update.effective_user.id != OWNER_ID:
+        logger.info("Unauthorized user")
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
+
+    logger.info("Authorized user, sending weekly questionnaire")
     await send_weekly_questionnaire(context)
+    await send_weekly_results(context) #added this line
+
+async def handle_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"Received update: {update}")
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
-    job_queue = application.job_queue
+    application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("testweekly", test_weekly))
     application.add_handler(CallbackQueryHandler(handle_weekly_poll_answer))
-    port = int(os.environ.get("PORT", 5000))
-    logger.info(f"Starting bot on port {port}")
-    application.run_polling()
+    application.add_handler(MessageHandler(filters.ALL, handle_update))
+
+    PORT = int(os.environ.get("PORT", "5000"))
+    logger.info(f"Starting bot on port {PORT}")
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        webhook_url=f"https://{APP_NAME}.onrender.com/{BOT_TOKEN}",
+        secret_token=TELEGRAM_SECRET_TOKEN
+    )
 
 if __name__ == "__main__":
     main()
