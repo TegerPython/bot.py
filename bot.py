@@ -189,7 +189,11 @@ def save_leaderboard():
         logger.error(f"Error saving leaderboard to GitHub: {e}")
 
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
     await send_question(context)
+    await update.message.reply_text("✅ Test question sent.")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
