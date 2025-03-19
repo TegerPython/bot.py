@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue
 import pytz
+import base64
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -115,11 +116,35 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def save_leaderboard():
     try:
-        response = requests.put(LEADERBOARD_JSON_URL, json=leaderboard)
-        response.raise_for_status()
-        logger.info("Leaderboard saved successfully.")
+        github_token = os.getenv("GITHUB_TOKEN")
+        repo_owner = "TegerPython"  # Replace with your GitHub username
+        repo_name = "bot_data"  # Replace with your repository name
+        file_path = "leaderboard.json"
+
+        # Get the current file's SHA for updating
+        get_file_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
+        headers = {"Authorization": f"token {github_token}", "Accept": "application/vnd.github.v3+json"}
+        get_response = requests.get(get_file_url, headers=headers)
+        get_response.raise_for_status()
+        sha = get_response.json()["sha"]
+
+        # Update the file
+        content = json.dumps(leaderboard, indent=4).encode("utf-8")
+        encoded_content = base64.b64encode(content).decode("utf-8")
+
+        update_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
+        data = {
+            "message": "Update leaderboard",
+            "content": encoded_content,
+            "sha": sha,
+            "branch": "main",  # Or your branch name
+        }
+        update_response = requests.put(update_url, headers=headers, json=data)
+        update_response.raise_for_status()
+
+        logger.info("Leaderboard saved successfully to GitHub.")
     except Exception as e:
-        logger.error(f"Error saving leaderboard: {e}")
+        logger.error(f"Error saving leaderboard to GitHub: {e}")
 
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_question(context)
