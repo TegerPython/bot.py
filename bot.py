@@ -12,6 +12,7 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
 APP_NAME = os.getenv("RENDER_APP_NAME") # for render url.
+TELEGRAM_SECRET_TOKEN = os.getenv("TELEGRAM_SECRET_TOKEN")
 
 # Global variables
 weekly_questions = [
@@ -91,13 +92,13 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_weekly_poll_answer))
     application.add_handler(MessageHandler(filters.ALL, handle_update))
 
-    PORT = int(os.environ.get("PORT", "10000"))
+    PORT = int(os.environ.get("PORT", "5000"))
     logger.info(f"Starting bot on port {PORT}")
     application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         webhook_url=f"https://{APP_NAME}.onrender.com/{BOT_TOKEN}",
-        secret_token = os.getenv("TELEGRAM_SECRET_TOKEN") # set this in render
+        secret_token = TELEGRAM_SECRET_TOKEN
     )
 
 if __name__ == "__main__":
