@@ -3,7 +3,7 @@ import logging
 import json
 from telegram import Update, Poll
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
-import weekly_leaderboard
+import bot_data.weekly_leaderboard
 import leaderboard
 import requests
 
@@ -66,11 +66,11 @@ async def handle_weekly_poll_answer(update: Update, context: ContextTypes.DEFAUL
         if option.voter_count > 0 and poll.options.index(option) == poll.correct_option_id:
             weekly_user_answers[user_id]["correct_answers"] += 1
             leaderboard.update_score(user_id, 1)
-            weekly_leaderboard.update_weekly_score(user_id, 1)
+            bot_data.weekly_leaderboard.update_weekly_score(user_id, 1)
             break
 
 async def send_weekly_results(context: ContextTypes.DEFAULT_TYPE):
-    weekly_leaderboard_data = weekly_leaderboard.load_weekly_leaderboard()
+    weekly_leaderboard_data = bot_data.weekly_leaderboard.load_weekly_leaderboard()
     results = sorted(weekly_leaderboard_data.items(), key=lambda item: item[1], reverse=True)
     message = "🏆 Weekly Quiz Results 🏆\n\n"
     if results:
@@ -93,7 +93,7 @@ async def test_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
-    weekly_leaderboard.reset_weekly_leaderboard()
+    bot_data.weekly_leaderboard.reset_weekly_leaderboard()
     weekly_questions = load_questions_from_url(WEEKLY_QUESTIONS_URL) # Load questions from URL
     if not weekly_questions:
         await update.message.reply_text("❌ Failed to load weekly questions.")
