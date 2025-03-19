@@ -1,7 +1,7 @@
 import os
 import logging
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -31,8 +31,7 @@ def main():
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("test", test_command))
-    application.add_handler(lambda update, context: handle_update(update, context))
-
+    application.add_handler(MessageHandler(filters.ALL, handle_update)) # Corrected line
     port = int(os.environ.get("PORT", 5000))
     logger.info(f"Starting bot on port {port}")
     application.run_polling()
