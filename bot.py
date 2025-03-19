@@ -1,11 +1,8 @@
 import os
 import logging
-import random
 import time
-from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue
-import pytz
+from telegram import Update, Poll
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -22,12 +19,11 @@ weekly_questions = [
     {"question": "What is the capital of France?", "options": ["Berlin", "London", "Paris"], "correct_option": 2},
     {"question": "What is the largest planet?", "options": ["Earth", "Jupiter", "Mars"], "correct_option": 1},
 ]
-weekly_question_index = 0
 weekly_poll_message_ids = []
 weekly_user_answers = {}
 
 async def send_weekly_questionnaire(context: ContextTypes.DEFAULT_TYPE):
-    global weekly_poll_message_ids, weekly_user_answers, weekly_question_index
+    global weekly_poll_message_ids, weekly_user_answers
     weekly_poll_message_ids = []
     weekly_user_answers = {}
     for i, question in enumerate(weekly_questions):
@@ -44,15 +40,6 @@ async def send_weekly_questionnaire(context: ContextTypes.DEFAULT_TYPE):
             time.sleep(5)  # Wait for 5 seconds
         except Exception as e:
             logger.error(f"Error sending weekly poll {i + 1}: {e}")
-    context.job_queue.run_once(close_weekly_polls, 5 * len(weekly_questions))
-
-async def close_weekly_polls(context: ContextTypes.DEFAULT_TYPE):
-    global weekly_poll_message_ids
-    for message_id in weekly_poll_message_ids:
-        try:
-            await context.bot.stop_poll(chat_id=CHANNEL_ID, message_id=message_id)
-        except Exception as e:
-            logger.error(f"Error closing weekly poll {message_id}: {e}")
     context.job_queue.run_once(send_weekly_results, 60) # one minute after the polls close.
 
 async def handle_weekly_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -92,7 +79,6 @@ async def test_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
-    job_queue = application.job_queue
     application.add_handler(CommandHandler("testweekly", test_weekly))
     application.add_handler(CallbackQueryHandler(handle_weekly_poll_answer))
     port = int(os.environ.get("PORT", 5000))
