@@ -45,19 +45,11 @@ async def send_weekly_questionnaire(context: ContextTypes.DEFAULT_TYPE):
             time.sleep(5)  # Wait for 5 seconds
         except Exception as e:
             logger.error(f"Error sending weekly poll {i + 1}: {e}")
-    context.job_queue.run_once(send_weekly_results, 60) # one minute after the polls close.
+    await send_weekly_results(context) # direct call, no job queue
 
 async def handle_weekly_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    poll = update.poll
-    user_id = update.effective_user.id
-    if poll.is_closed:
-        return
-    if user_id not in weekly_user_answers:
-        weekly_user_answers[user_id] = {"correct_answers": 0, "username": update.effective_user.first_name}
-    for option in poll.options:
-        if option.voter_count > 0 and poll.options.index(option) == poll.correct_option_id:
-            weekly_user_answers[user_id]["correct_answers"] += 1
-            break # only one correct answer
+    logger.info(f"Received poll answer: {update.poll.id}") # simplified logging
+    # time.sleep(1) # add delay if needed
 
 async def send_weekly_results(context: ContextTypes.DEFAULT_TYPE):
     results = sorted(weekly_user_answers.items(), key=lambda item: item[1]["correct_answers"], reverse=True)
