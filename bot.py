@@ -9,7 +9,7 @@ import pytz
 import asyncio
 
 # Logging setup
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Environment Variables
@@ -53,7 +53,7 @@ async def send_weekly_poll_question(context: ContextTypes.DEFAULT_TYPE, question
             options=question["options"],
             type=Poll.QUIZ,
             correct_option_id=question["correct_option"],
-            open_period=30,  # 30 seconds for testing
+            open_period=20,  # Increased to 20 seconds for testing
         )
         return message.poll.id
     except Exception as e:
@@ -63,8 +63,19 @@ async def send_weekly_poll_question(context: ContextTypes.DEFAULT_TYPE, question
 async def handle_poll_results(context: ContextTypes.DEFAULT_TYPE, poll_id, question):
     try:
         logger.info(f"Handling poll results for poll ID: {poll_id}")
-        poll = await context.bot.get_poll(poll_id=poll_id)
-        logger.info(f"Poll results: {poll}")
+        # Retry logic for poll retrieval
+        for attempt in range(3):
+            try:
+                poll = await context.bot.get_poll(poll_id=poll_id)
+                logger.info(f"Poll results (attempt {attempt+1}): {poll}")
+                break
+            except Exception as retry_e:
+                logger.warning(f"Error getting poll (attempt {attempt+1}): {retry_e}. Retrying in 2 seconds.")
+                await asyncio.sleep(2)
+        else:
+            logger.error(f"Failed to retrieve poll after 3 attempts. Poll ID: {poll_id}")
+            return
+
         for option in poll.options:
             if poll.options.index(option) == poll.correct_option_id:
                 logger.info(f"Correct option: {option}")
@@ -114,7 +125,7 @@ async def test_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     for question in weekly_questions[:3]:
         poll_id = await send_weekly_poll_question(context, question)
-        await asyncio.sleep(30)  # Wait for poll to close
+        await asyncio.sleep(20)  # Wait for poll to close
         await handle_poll_results(context, poll_id, question)
 
     await send_weekly_results(context)
