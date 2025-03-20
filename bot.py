@@ -3,7 +3,7 @@ import logging
 import json
 import requests
 import time
-from telegram import Update, Poll
+from telegram import Update, Poll, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 import pytz
 import asyncio
@@ -66,7 +66,9 @@ async def handle_poll_results(context: ContextTypes.DEFAULT_TYPE, poll_id, quest
         # Retry logic for poll retrieval
         for attempt in range(3):
             try:
-                poll = await context.bot.get_poll(poll_id=poll_id)
+                # Explicitly create a Bot instance
+                bot = Bot(token=BOT_TOKEN)
+                poll = await bot.get_poll(poll_id=poll_id)
                 logger.info(f"Poll results (attempt {attempt+1}): {poll}")
                 break
             except Exception as retry_e:
