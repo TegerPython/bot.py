@@ -3,15 +3,16 @@ import json
 import logging
 import asyncio
 import datetime
-from telegram import Update, Poll, User
-from telegram.ext import Application, CommandHandler, PollHandler, ContextTypes
+from telegram import Update, Poll, PollOption, Bot
+from telegram.ext import Application, CommandHandler, PollAnswerHandler, ContextTypes
 
 # Leaderboard data structure
 class WeeklyLeaderboard:
     def __init__(self):
         self.participants = {}  # user_id -> {"name": name, "score": score}
         self.current_questions = []
-        self.answered_questions = 0
+        self.current_poll_id = None  # Track the ID of the current active poll
+        self.question_index = 0  # Track which question we're on
         self.active = False
     
     def add_point(self, user_id, user_name):
@@ -29,7 +30,8 @@ class WeeklyLeaderboard:
     
     def reset(self):
         self.participants = {}
-        self.answered_questions = 0
+        self.question_index = 0
+        self.current_poll_id = None
         self.active = False
 
 # Global leaderboard instance
@@ -41,6 +43,7 @@ async def send_poll_with_delay(context, question_index):
     
     if question_index >= len(leaderboard.current_questions):
         # All questions sent, schedule leaderboard post
+        logging.info("All questions sent, scheduling leaderboard results in 60 seconds")
         context.job_queue.run_once(
             lambda ctx: asyncio.create_task(send_leaderboard_results(ctx)),
             60  # Wait 1 minute after the last question
@@ -52,22 +55,26 @@ async def send_poll_with_delay(context, question_index):
     
     try:
         # Send poll
-        await context.bot.send_poll(
+        message = await context.bot.send_poll(
             chat_id=CHANNEL_ID,
             question=question["question"],
             options=question["options"],
             type=Poll.QUIZ,
             correct_option_id=question["correct_option"],
-            open_period=5,  # 5 seconds
-            is_anonymous=True
+            open_period=20,  # 20 seconds to answer
+            is_anonymous=False  # Important: Set to False to track user answers
         )
         
-        logging.info(f"Poll {question_index+1} sent, scheduling next poll")
+        # Store the poll ID so we can match answers to the current question
+        leaderboard.current_poll_id = message.poll.id
+        leaderboard.question_index = question_index
         
-        # Schedule next poll after this one completes
+        logging.info(f"Poll {question_index+1} sent with poll_id: {leaderboard.current_poll_id}")
+        
+        # Schedule next poll after this one completes (wait for open_period + 2 seconds)
         context.job_queue.run_once(
             lambda ctx: asyncio.create_task(send_poll_with_delay(ctx, question_index + 1)), 
-            7  # Wait 7 seconds before sending next poll
+            20 + 5  # Wait for poll duration plus a 5-second gap
         )
     except Exception as e:
         logging.error(f"Error sending poll {question_index+1}: {e}")
@@ -80,18 +87,31 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     
     poll_answer = update.poll_answer
+    
+    # Check if this answer is for our current poll
+    if poll_answer.poll_id != leaderboard.current_poll_id:
+        logging.info(f"Received answer for a different poll: {poll_answer.poll_id}")
+        return
+    
     user_id = poll_answer.user.id
-    user_name = poll_answer.user.full_name
+    user_name = poll_answer.user.first_name
+    
+    # Get the full name if available
+    if poll_answer.user.last_name:
+        user_name += f" {poll_answer.user.last_name}"
+    
+    logging.info(f"User {user_name} (ID: {user_id}) answered poll {poll_answer.poll_id}")
     
     # Check if the answer is correct
-    question_index = leaderboard.answered_questions
-    if question_index < len(leaderboard.current_questions):
-        correct_option = leaderboard.current_questions[question_index]["correct_option"]
+    if leaderboard.question_index < len(leaderboard.current_questions):
+        correct_option = leaderboard.current_questions[leaderboard.question_index]["correct_option"]
+        
+        # Check if user selected the correct option
         if poll_answer.option_ids and poll_answer.option_ids[0] == correct_option:
             leaderboard.add_point(user_id, user_name)
-            logging.info(f"User {user_name} answered correctly for question {question_index+1}")
-    
-    leaderboard.answered_questions += 1
+            logging.info(f"User {user_name} answered correctly for question {leaderboard.question_index+1}")
+        else:
+            logging.info(f"User {user_name} answered incorrectly for question {leaderboard.question_index+1}")
 
 async def send_leaderboard_results(context):
     """Send the leaderboard results in a visually appealing format"""
@@ -101,6 +121,7 @@ async def send_leaderboard_results(context):
         return
     
     results = leaderboard.get_results()
+    logging.info(f"Sending leaderboard results with {len(results)} participants")
     
     # Create the leaderboard message
     message = "🏆 *WEEKLY TEST RESULTS* 🏆\n\n"
@@ -125,7 +146,7 @@ async def send_leaderboard_results(context):
         # Create the podium display
         message += "      🥇\n"
         message += f"      {gold_name}\n"
-        message += f"      {gold_score} pts\n"
+        message += f"      {gold_score} pts\n\n"
         message += "  🥈         🥉\n"
         message += f"  {silver_name}    {bronze_name}\n"
         message += f"  {silver_score} pts    {bronze_score} pts\n\n"
@@ -163,6 +184,7 @@ async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     user_id = update.effective_user.id
     
+    # Check authorization
     if user_id != OWNER_ID and update.effective_chat.id != CHANNEL_ID:
         await update.message.reply_text("❌ Not authorized")
         return
@@ -172,30 +194,20 @@ async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Reset and prepare the leaderboard
         leaderboard.reset()
         
-        # For testing, use the hardcoded questions
-        # In production, you would uncomment the fetch from URL:
-        # import requests
-        # response = requests.get(os.getenv("WEEKLY_QUESTIONS_JSON_URL"))
-        # questions = response.json()
-        
-        # For testing, use the hardcoded questions
-        questions = [
-            {
-                "question": "What is the capital of France?",
-                "options": ["Paris", "London", "Berlin", "Madrid"],
-                "correct_option": 0
-            },
-            {
-                "question": "Which planet is closest to the sun?",
-                "options": ["Mercury", "Venus", "Earth", "Mars"],
-                "correct_option": 0
-            },
-            {
-                "question": "What is 2+2?",
-                "options": ["3", "4", "5", "6"],
-                "correct_option": 1
-            }
-        ]
+        # For production, fetch questions from URL
+        if WEEKLY_QUESTIONS_JSON_URL:
+            try:
+                import requests
+                response = requests.get(WEEKLY_QUESTIONS_JSON_URL)
+                questions = response.json()
+                logging.info(f"Loaded {len(questions)} questions from URL")
+            except Exception as e:
+                logging.error(f"Error loading questions from URL: {e}")
+                # Fall back to test questions if URL fetch fails
+                questions = get_test_questions()
+        else:
+            # For testing, use the hardcoded questions
+            questions = get_test_questions()
         
         leaderboard.current_questions = questions
         leaderboard.active = True
@@ -210,15 +222,53 @@ async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         logging.error(f"Error in weekly test command: {e}")
         await update.message.reply_text("Failed to start weekly test. Check logs for details.")
 
+def get_test_questions():
+    """Return a set of test questions"""
+    return [
+        {
+            "question": "What is the capital of France?",
+            "options": ["Paris", "London", "Berlin", "Madrid"],
+            "correct_option": 0
+        },
+        {
+            "question": "Which planet is closest to the sun?",
+            "options": ["Mercury", "Venus", "Earth", "Mars"],
+            "correct_option": 0
+        },
+        {
+            "question": "What is 2+2?",
+            "options": ["3", "4", "5", "6"],
+            "correct_option": 1
+        }
+    ]
+
 def main():
-    # Set up your bot as before
+    # Set up logging
+    logging.basicConfig(level=logging.INFO, 
+                      format='%(asctime)s - %(levelname)s - %(message)s')
+    
+    # Define environment variables
+    global BOT_TOKEN, CHANNEL_ID, OWNER_ID, WEBHOOK_URL, PORT, WEEKLY_QUESTIONS_JSON_URL
+    
+    BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+    CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
+    OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0"))
+    WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+    PORT = int(os.getenv("PORT", "8443"))
+    WEEKLY_QUESTIONS_JSON_URL = os.getenv("WEEKLY_QUESTIONS_JSON_URL")
+    
+    if not BOT_TOKEN:
+        logging.error("TELEGRAM_BOT_TOKEN environment variable not set!")
+        return
+    
+    # Set up your bot
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Add command handlers
     application.add_handler(CommandHandler("weeklytest", weekly_test_command))
     
-    # Add poll answer handler
-    application.add_handler(PollHandler(handle_poll_answer))
+    # Add poll answer handler - IMPORTANT: Use PollAnswerHandler, not PollHandler
+    application.add_handler(PollAnswerHandler(handle_poll_answer))
     
     # Register error handler
     application.add_error_handler(lambda update, context: 
@@ -241,15 +291,4 @@ def main():
         application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    # Setup logging
-    logging.basicConfig(level=logging.INFO, 
-                      format='%(asctime)s - %(levelname)s - %(message)s')
-    
-    # Define environment variables
-    BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-    CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
-    OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0"))
-    WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-    PORT = int(os.getenv("PORT", "8443"))
-    
     main()
