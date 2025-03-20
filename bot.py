@@ -1,8 +1,7 @@
 import os
 import logging
-import asyncio
-from telegram import Update, Poll, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram import Update, Poll
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -34,87 +33,78 @@ weekly_questions = [
     }
 ]
 
-async def send_weekly_test(context: ContextTypes.DEFAULT_TYPE):
-    """Send a series of polls to the channel with short timing"""
-    logger.info("Starting weekly test sequence")
+# Current question index
+current_question_index = 0
+
+async def send_next_question(context: ContextTypes.DEFAULT_TYPE):
+    """Send the next question in the weekly test sequence"""
+    global current_question_index
     
-    for i, question in enumerate(weekly_questions):
-        try:
-            logger.info(f"Sending question {i+1}: {question['question']}")
-            
-            # Send poll to channel
-            poll_message = await context.bot.send_poll(
-                chat_id=CHANNEL_ID,
-                question=question["question"],
-                options=question["options"],
-                type=Poll.QUIZ,
-                correct_option_id=question["correct_option"],
-                open_period=5,  # 5 seconds per question
-                is_anonymous=False
-            )
-            
-            logger.info(f"Poll {i+1} sent successfully")
-            
-            # Wait for poll to complete before sending next one
-            await asyncio.sleep(6)  # Wait slightly longer than open_period
-            
-        except Exception as e:
-            logger.error(f"Error sending weekly test question {i+1}: {e}")
-    
-    # Send completion message
-    try:
+    # Check if we've sent all questions
+    if current_question_index >= len(weekly_questions):
         await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text="Weekly test completed! Thank you for participating."
         )
-    except Exception as e:
-        logger.error(f"Error sending completion message: {e}")
-
-async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Command handler for /weeklytest"""
-    user_id = update.effective_user.id
-    
-    # Allow both owner and direct requests from the channel
-    if user_id != OWNER_ID and update.effective_chat.id != CHANNEL_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
+        current_question_index = 0  # Reset for next test
         return
     
-    await update.message.reply_text("Starting weekly test in the channel...")
-    
-    # Start weekly test process
-    await send_weekly_test(context)
-
-async def test_poll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Command handler for /testpoll"""
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ Not authorized")
-        return
+    # Get the current question
+    question = weekly_questions[current_question_index]
+    logger.info(f"Sending question {current_question_index + 1}: {question['question']}")
     
     try:
-        poll_message = await context.bot.send_poll(
+        # Send poll to channel
+        await context.bot.send_poll(
             chat_id=CHANNEL_ID,
-            question="Test Poll?",
-            options=["Yes", "No"],
+            question=question["question"],
+            options=question["options"],
             type=Poll.QUIZ,
-            correct_option_id=0,
-            open_period=5,
+            correct_option_id=question["correct_option"],
+            open_period=5,  # 5 seconds per question
             is_anonymous=False
         )
         
-        await update.message.reply_text(f"Test poll sent to channel. ID: {poll_message.poll.id}")
+        # Increment question index
+        current_question_index += 1
+        
+        # Schedule the next question
+        context.job_queue.run_once(send_next_question, 6)  # Wait 6 seconds before next question
+        
     except Exception as e:
-        logger.error(f"Error sending test poll: {e}")
-        await update.message.reply_text(f"Error: {str(e)}")
+        logger.error(f"Error sending question: {e}")
+        # Try to recover by sending the next question
+        current_question_index += 1
+        context.job_queue.run_once(send_next_question, 2)
+
+async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command handler for /weeklytest"""
+    global current_question_index
+    
+    user_id = update.effective_user.id
+    if user_id != OWNER_ID:
+        await update.message.reply_text("❌ Not authorized")
+        return
+    
+    # Reset question index
+    current_question_index = 0
+    
+    # Notify user
+    await update.message.reply_text("Starting weekly test in the channel...")
+    
+    # Start the question sequence
+    await send_next_question(context)
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Add command handlers
-    application.add_handler(CommandHandler("testpoll", test_poll_command))
     application.add_handler(CommandHandler("weeklytest", weekly_test_command))
     
-    # Register error handler
-    application.add_error_handler(lambda update, context: logger.error(f"Error: {context.error}", exc_info=context.error))
+    # Error handler
+    def error_handler(update, context):
+        logger.error(f"Error: {context.error}", exc_info=context.error)
+    application.add_error_handler(error_handler)
     
     # Check if webhook URL is provided
     if WEBHOOK_URL:
