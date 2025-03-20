@@ -2,8 +2,7 @@ import os
 import json
 import logging
 import asyncio
-import datetime
-from telegram import Update, Poll, PollOption, Bot
+from telegram import Update, Poll
 from telegram.ext import Application, CommandHandler, PollAnswerHandler, ContextTypes
 
 # Leaderboard data structure
@@ -61,8 +60,8 @@ async def send_poll_with_delay(context, question_index):
             options=question["options"],
             type=Poll.QUIZ,
             correct_option_id=question["correct_option"],
-            open_period=3,  # 20 seconds to answer
-            is_anonymous=True  # Important: Set to False to track user answers
+            open_period=20,  # 20 seconds to answer
+            is_anonymous=False  # Important: Set to False to track user answers
         )
         
         # Store the poll ID so we can match answers to the current question
@@ -74,7 +73,7 @@ async def send_poll_with_delay(context, question_index):
         # Schedule next poll after this one completes (wait for open_period + 2 seconds)
         context.job_queue.run_once(
             lambda ctx: asyncio.create_task(send_poll_with_delay(ctx, question_index + 1)), 
-            20 + 5  # Wait for poll duration plus a 5-second gap
+            25  # Wait for poll duration (20s) plus a 5-second gap
         )
     except Exception as e:
         logging.error(f"Error sending poll {question_index+1}: {e}")
@@ -189,31 +188,34 @@ async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("❌ Not authorized")
         return
     
-    # Load questions from JSON URL
     try:
         # Reset and prepare the leaderboard
         leaderboard.reset()
         
-        # For production, fetch questions from URL
-        if WEEKLY_QUESTIONS_JSON_URL:
-            try:
-                import requests
-                response = requests.get(WEEKLY_QUESTIONS_JSON_URL)
-                questions = response.json()
-                logging.info(f"Loaded {len(questions)} questions from URL")
-            except Exception as e:
-                logging.error(f"Error loading questions from URL: {e}")
-                # Fall back to test questions if URL fetch fails
-                questions = get_test_questions()
-        else:
-            # For testing, use the hardcoded questions
-            questions = get_test_questions()
+        # Load just 3 test questions
+        questions = [
+            {
+                "question": "What is the capital of France?",
+                "options": ["Paris", "London", "Berlin", "Madrid"],
+                "correct_option": 0
+            },
+            {
+                "question": "Which planet is closest to the sun?",
+                "options": ["Mercury", "Venus", "Earth", "Mars"],
+                "correct_option": 0
+            },
+            {
+                "question": "What is 2+2?",
+                "options": ["3", "4", "5", "6"],
+                "correct_option": 1
+            }
+        ]
         
         leaderboard.current_questions = questions
         leaderboard.active = True
         
         # Start the sequence with the first question
-        await update.message.reply_text("Starting weekly test...")
+        await update.message.reply_text("Starting weekly test with 3 questions...")
         
         # Send first poll and let the chain continue
         await send_poll_with_delay(context, 0)
@@ -222,40 +224,19 @@ async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         logging.error(f"Error in weekly test command: {e}")
         await update.message.reply_text("Failed to start weekly test. Check logs for details.")
 
-def get_test_questions():
-    """Return a set of test questions"""
-    return [
-        {
-            "question": "What is the capital of France?",
-            "options": ["Paris", "London", "Berlin", "Madrid"],
-            "correct_option": 0
-        },
-        {
-            "question": "Which planet is closest to the sun?",
-            "options": ["Mercury", "Venus", "Earth", "Mars"],
-            "correct_option": 0
-        },
-        {
-            "question": "What is 2+2?",
-            "options": ["3", "4", "5", "6"],
-            "correct_option": 1
-        }
-    ]
-
 def main():
     # Set up logging
     logging.basicConfig(level=logging.INFO, 
                       format='%(asctime)s - %(levelname)s - %(message)s')
     
     # Define environment variables
-    global BOT_TOKEN, CHANNEL_ID, OWNER_ID, WEBHOOK_URL, PORT, WEEKLY_QUESTIONS_JSON_URL
+    global BOT_TOKEN, CHANNEL_ID, OWNER_ID, WEBHOOK_URL, PORT
     
     BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
     OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0"))
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
     PORT = int(os.getenv("PORT", "8443"))
-    WEEKLY_QUESTIONS_JSON_URL = os.getenv("WEEKLY_QUESTIONS_JSON_URL")
     
     if not BOT_TOKEN:
         logging.error("TELEGRAM_BOT_TOKEN environment variable not set!")
