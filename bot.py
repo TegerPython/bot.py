@@ -50,7 +50,7 @@ def load_leaderboard():
     global leaderboard
     leaderboard = load_questions(LEADERBOARD_JSON_URL)
 
-load_questions()
+load_questions(QUESTIONS_JSON_URL)
 load_leaderboard()
 
 async def send_weekly_question(context: ContextTypes.DEFAULT_TYPE, question):
