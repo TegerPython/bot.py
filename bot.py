@@ -1,7 +1,8 @@
 import os
 import logging
-from telegram import Update, Poll
-from telegram.ext import Application, CommandHandler, ContextTypes
+import asyncio
+from telegram import Update, Poll, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -33,67 +34,57 @@ weekly_questions = [
     }
 ]
 
-# Current question index
-current_question_index = 0
-
-async def send_next_question(context: ContextTypes.DEFAULT_TYPE):
-    """Send the next question in the weekly test sequence"""
-    global current_question_index
-    
-    # Check if we've sent all questions
-    if current_question_index >= len(weekly_questions):
+async def send_poll_with_delay(context, question_index):
+    """Send a single poll with proper timing"""
+    if question_index >= len(weekly_questions):
+        # All questions sent, send completion message
         await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text="Weekly test completed! Thank you for participating."
         )
-        current_question_index = 0  # Reset for next test
         return
     
-    # Get the current question
-    question = weekly_questions[current_question_index]
-    logger.info(f"Sending question {current_question_index + 1}: {question['question']}")
+    question = weekly_questions[question_index]
+    logger.info(f"Sending question {question_index+1}: {question['question']}")
     
     try:
-        # Send poll to channel
+        # Send poll
         await context.bot.send_poll(
             chat_id=CHANNEL_ID,
             question=question["question"],
             options=question["options"],
             type=Poll.QUIZ,
             correct_option_id=question["correct_option"],
-            open_period=5,  # 5 seconds per question
+            open_period=5,  # 5 seconds
             is_anonymous=False
         )
         
-        # Increment question index
-        current_question_index += 1
+        logger.info(f"Poll {question_index+1} sent, scheduling next poll")
         
-        # Schedule the next question
-        context.job_queue.run_once(send_next_question, 6)  # Wait 6 seconds before next question
-        
+        # Schedule next poll after this one completes
+        context.job_queue.run_once(
+            lambda ctx: asyncio.create_task(send_poll_with_delay(ctx, question_index + 1)), 
+            7  # Wait 7 seconds before sending next poll
+        )
     except Exception as e:
-        logger.error(f"Error sending question: {e}")
-        # Try to recover by sending the next question
-        current_question_index += 1
-        context.job_queue.run_once(send_next_question, 2)
+        logger.error(f"Error sending poll {question_index+1}: {e}")
 
 async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Command handler for /weeklytest"""
-    global current_question_index
-    
     user_id = update.effective_user.id
-    if user_id != OWNER_ID:
+    
+    # Log who triggered the command and from where
+    logger.info(f"Weekly test triggered by user {user_id} from chat {update.effective_chat.id}")
+    
+    if user_id != OWNER_ID and update.effective_chat.id != CHANNEL_ID:
         await update.message.reply_text("❌ Not authorized")
         return
     
-    # Reset question index
-    current_question_index = 0
+    # Start the sequence with the first question
+    await update.message.reply_text(f"Starting weekly test in channel {CHANNEL_ID}...")
     
-    # Notify user
-    await update.message.reply_text("Starting weekly test in the channel...")
-    
-    # Start the question sequence
-    await send_next_question(context)
+    # Send first poll and let the chain continue
+    await send_poll_with_delay(context, 0)
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
@@ -101,10 +92,8 @@ def main():
     # Add command handlers
     application.add_handler(CommandHandler("weeklytest", weekly_test_command))
     
-    # Error handler
-    def error_handler(update, context):
-        logger.error(f"Error: {context.error}", exc_info=context.error)
-    application.add_error_handler(error_handler)
+    # Register error handler
+    application.add_error_handler(lambda update, context: logger.error(f"Error: {context.error}", exc_info=context.error))
     
     # Check if webhook URL is provided
     if WEBHOOK_URL:
