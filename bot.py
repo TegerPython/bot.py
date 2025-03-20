@@ -4,7 +4,7 @@ import json
 import requests
 import time
 from telegram import Update, Poll
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 import pytz
 
 # Logging setup
@@ -46,35 +46,33 @@ def load_leaderboard(url):
         logger.error(f"Error fetching leaderboard from {url}: {e}")
         return {}
 
-async def send_weekly_questionnaire(context: ContextTypes.DEFAULT_TYPE):
-    global weekly_poll_message_ids, weekly_user_answers
-    weekly_poll_message_ids = []
-    weekly_user_answers = {}
-    for i, question in enumerate(weekly_questions[:3]): #Limit to 3 questions
-        try:
-            message = await context.bot.send_poll(
-                chat_id=CHANNEL_ID,
-                question=question["question"],
-                options=question["options"],
-                type=Poll.QUIZ,
-                correct_option_id=question["correct_option"],
-                open_period=3,  # 3 seconds for testing
-            )
-            weekly_poll_message_ids.append(message.message_id)
-        except Exception as e:
-            logger.error(f"Error sending weekly poll {i + 1}: {e}")
+async def send_weekly_poll_question(context: ContextTypes.DEFAULT_TYPE, question):
+    try:
+        message = await context.bot.send_poll(
+            chat_id=CHANNEL_ID,
+            question=question["question"],
+            options=question["options"],
+            type=Poll.QUIZ,
+            correct_option_id=question["correct_option"],
+            open_period=3,  # 3 seconds for testing
+        )
+        return message.poll.id
+    except Exception as e:
+        logger.error(f"Error sending weekly poll question: {e}")
+        return None
 
-async def handle_weekly_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    poll = update.poll
-    user_id = update.effective_user.id
-    if poll.is_closed:
-        return
-    if user_id not in weekly_user_answers:
-        weekly_user_answers[user_id] = {"correct_answers": 0, "username": update.effective_user.first_name}
-    for option in poll.options:
-        if option.voter_count > 0 and poll.options.index(option) == poll.correct_option_id:
-            weekly_user_answers[user_id]["correct_answers"] += 1
-            break
+async def handle_poll_results(context: ContextTypes.DEFAULT_TYPE, poll_id, question):
+    try:
+        poll = await context.bot.get_poll(poll_id=poll_id)
+        for option in poll.options:
+            if poll.options.index(option) == poll.correct_option_id:
+                for user in option.voters:
+                    if str(user.user.id) not in weekly_user_answers:
+                        weekly_user_answers[str(user.user.id)] = {"username": user.user.first_name, "score": 0}
+                    weekly_user_answers[str(user.user.id)]["score"] += 1
+                break
+    except Exception as e:
+        logger.error(f"Error handling poll results: {e}")
 
 async def send_weekly_results(context: ContextTypes.DEFAULT_TYPE):
     weekly_results = load_leaderboard(WEEKLY_LEADERBOARD_JSON_URL)
@@ -103,19 +101,24 @@ async def test_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
 
-    global weekly_questions
+    global weekly_questions, weekly_user_answers
     weekly_questions = load_questions(WEEKLY_QUESTIONS_JSON_URL)
     if not weekly_questions:
         await update.message.reply_text("❌ Failed to load weekly questions.")
         return
 
-    await send_weekly_questionnaire(context)
+    weekly_user_answers = {}
+
+    for question in weekly_questions[:3]:
+        poll_id = await send_weekly_poll_question(context, question)
+        time.sleep(3)  # Wait for poll to close
+        await handle_poll_results(context, poll_id, question)
+
     await send_weekly_results(context)
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("testweekly", test_weekly))
-    application.add_handler(CallbackQueryHandler(handle_weekly_poll_answer))
 
     port = int(os.environ.get("PORT", 5000))
     logger.info(f"Starting bot on port {port}")
