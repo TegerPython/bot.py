@@ -61,7 +61,7 @@ async def send_poll_with_delay(context, question_index):
             type=Poll.QUIZ,
             correct_option_id=question["correct_option"],
             open_period=20,  # 20 seconds to answer
-            is_anonymous=False  # Important: Set to False to track user answers
+            is_anonymous=True  # Important: Set to False to track user answers
         )
         
         # Store the poll ID so we can match answers to the current question
