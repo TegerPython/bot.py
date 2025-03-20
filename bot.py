@@ -50,14 +50,14 @@ async def send_poll_with_delay(context, question_index):
     try:
         # Send poll
         await context.bot.send_poll(
-    chat_id=CHANNEL_ID,
-    question=question["question"],
-    options=question["options"],
-    type=Poll.QUIZ,
-    correct_option_id=question["correct_option"],
-    open_period=5,
-    is_anonymous=True  # Change this to True
-)
+            chat_id=CHANNEL_ID,
+            question=question["question"],
+            options=question["options"],
+            type=Poll.QUIZ,
+            correct_option_id=question["correct_option"],
+            open_period=5,
+            is_anonymous=True  # Change this to True
+        )
         logger.info(f"Poll {question_index+1} sent, scheduling next poll")
         
         # Schedule next poll after this one completes
