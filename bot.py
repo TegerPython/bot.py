@@ -1,133 +1,90 @@
 import os
+import asyncio
 import logging
 import json
-import requests
-import time
-from telegram import Update, Poll
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-import pytz
+import random
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 
-# Logging setup
+# Bot Token & Config
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+CHANNEL_ID = int(os.environ.get("CHANNEL_ID"))
+QUESTIONS_JSON_URL = os.environ.get("QUESTIONS_JSON_URL")
+
+# Enable Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Environment Variables
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
-OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
-LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
-WEEKLY_QUESTIONS_JSON_URL = os.getenv("WEEKLY_QUESTIONS_JSON_URL")
-WEEKLY_LEADERBOARD_JSON_URL = os.getenv("WEEKLY_LEADERBOARD_JSON_URL")
+# Store User Scores
+user_scores = {}
 
-# Global variables
-weekly_questions = []
-weekly_user_answers = {}
-weekly_poll_message_ids = []
+# Load Sample Questions (3 for Testing)
+test_questions = [
+    {"question": "What is 2 + 2?", "options": ["3", "4", "5"], "answer": "4"},
+    {"question": "What is the capital of France?", "options": ["Paris", "London", "Berlin"], "answer": "Paris"},
+    {"question": "Which planet is closest to the Sun?", "options": ["Earth", "Venus", "Mercury"], "answer": "Mercury"}
+]
 
-# Load Questions from URL
-def load_questions(url):
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error fetching questions from {url}: {e}")
-        return []
+async def start(update: Update, context: CallbackContext) -> None:
+    """Start command to trigger the test sequence."""
+    user_scores.clear()  # Reset scores
+    await update.message.reply_text("Starting test! Answer correctly to earn points. 🏆")
+    await run_test(update, context)
 
-# Load Leaderboard from URL
-def load_leaderboard(url):
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error fetching leaderboard from {url}: {e}")
-        return {}
+async def run_test(update: Update, context: CallbackContext) -> None:
+    """Posts 3 questions sequentially, every 5 seconds."""
+    chat_id = update.message.chat_id
 
-async def send_weekly_poll_question(context: ContextTypes.DEFAULT_TYPE, question):
-    try:
-        message = await context.bot.send_poll(
-            chat_id=CHANNEL_ID,
-            question=question["question"],
-            options=question["options"],
-            type=Poll.QUIZ,
-            correct_option_id=question["correct_option"],
-            open_period=3,  # 3 seconds for testing
-        )
-        return message.poll.id
-    except Exception as e:
-        logger.error(f"Error sending weekly poll question: {e}")
-        return None
+    for i, q in enumerate(test_questions):
+        question_text = f"❓ Question {i+1}: {q['question']}\n"
+        question_text += "\n".join([f"{idx+1}. {opt}" for idx, opt in enumerate(q['options'])])
+        
+        await context.bot.send_message(chat_id=chat_id, text=question_text)
+        
+        # Store correct answer for checking
+        context.user_data["current_answer"] = q["answer"]
+        
+        # Wait for 5 seconds before the next question
+        await asyncio.sleep(5)
 
-async def handle_poll_results(context: ContextTypes.DEFAULT_TYPE, poll_id, question):
-    try:
-        poll = await context.bot.get_poll(poll_id=poll_id)
-        for option in poll.options:
-            if poll.options.index(option) == poll.correct_option_id:
-                for user in option.voters:
-                    if str(user.user.id) not in weekly_user_answers:
-                        weekly_user_answers[str(user.user.id)] = {"username": user.user.first_name, "score": 0}
-                    weekly_user_answers[str(user.user.id)]["score"] += 1
-                break
-    except Exception as e:
-        logger.error(f"Error handling poll results: {e}")
+    # Show leaderboard after all questions
+    await show_leaderboard(update, context)
 
-async def send_weekly_results(context: ContextTypes.DEFAULT_TYPE):
-    weekly_results = load_leaderboard(WEEKLY_LEADERBOARD_JSON_URL)
-    results = sorted(weekly_results.items(), key=lambda item: item[1]["score"], reverse=True)
-    message = "🏆 Weekly Test Results 🏆\n\n"
-    if results:
-        for i, (user_id, user_data) in enumerate(results):
-            user = await context.bot.get_chat(user_id)
-            if i == 0:
-                message += f"🥇 {user.first_name} 🥇: {user_data['score']} points\n\n"
-            elif i == 1:
-                message += f"🥈 {user.first_name} 🥈: {user_data['score']} points\n"
-            elif i == 2:
-                message += f"🥉 {user.first_name} 🥉: {user_data['score']} points\n"
-            else:
-                message += f"{user.first_name}: {user_data['score']} points\n"
+async def handle_response(update: Update, context: CallbackContext) -> None:
+    """Checks user answer and updates scores."""
+    user_id = update.message.from_user.id
+    user_answer = update.message.text.strip()
+    correct_answer = context.user_data.get("current_answer")
+
+    if correct_answer and user_answer.lower() == correct_answer.lower():
+        user_scores[user_id] = user_scores.get(user_id, 0) + 1
+        await update.message.reply_text("✅ Correct! 🎉")
     else:
-        message += "No participants."
-    await context.bot.send_message(chat_id=CHANNEL_ID, text=message)
+        await update.message.reply_text("❌ Wrong answer!")
 
-async def test_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.info(f"test_weekly called by user ID: {update.effective_user.id}")
-    logger.info(f"OWNER_ID: {OWNER_ID}")
-    if update.effective_user.id != OWNER_ID:
-        logger.info("test_weekly: user not authorized")
-        await update.message.reply_text("❌ You are not authorized to use this command.")
+async def show_leaderboard(update: Update, context: CallbackContext) -> None:
+    """Displays leaderboard after all questions."""
+    if not user_scores:
+        await update.message.reply_text("No correct answers were recorded. 😢")
         return
 
-    global weekly_questions, weekly_user_answers
-    weekly_questions = load_questions(WEEKLY_QUESTIONS_JSON_URL)
-    if not weekly_questions:
-        await update.message.reply_text("❌ Failed to load weekly questions.")
-        return
+    leaderboard_text = "🏆 **Leaderboard** 🏆\n\n"
+    sorted_scores = sorted(user_scores.items(), key=lambda x: x[1], reverse=True)
 
-    weekly_user_answers = {}
+    for i, (user_id, score) in enumerate(sorted_scores, start=1):
+        leaderboard_text += f"{i}. User {user_id} - {score} points\n"
 
-    for question in weekly_questions[:3]:
-        poll_id = await send_weekly_poll_question(context, question)
-        time.sleep(3)  # Wait for poll to close
-        await handle_poll_results(context, poll_id, question)
-
-    await send_weekly_results(context)
+    await update.message.reply_text(leaderboard_text)
 
 def main():
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_handler(CommandHandler("testweekly", test_weekly))
-
-    port = int(os.environ.get("PORT", 5000))
-    logger.info(f"Starting bot on port {port}")
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=BOT_TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-    )
+    """Start the bot."""
+    app = Application.builder().token(TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_response))
+    
+    logger.info("Bot is running...")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
