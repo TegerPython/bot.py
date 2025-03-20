@@ -53,7 +53,7 @@ async def send_weekly_poll_question(context: ContextTypes.DEFAULT_TYPE, question
             options=question["options"],
             type=Poll.QUIZ,
             correct_option_id=question["correct_option"],
-            open_period=5,  # 5 seconds for testing
+            open_period=30,  # 30 seconds for testing
         )
         return message.poll.id
     except Exception as e:
@@ -62,10 +62,14 @@ async def send_weekly_poll_question(context: ContextTypes.DEFAULT_TYPE, question
 
 async def handle_poll_results(context: ContextTypes.DEFAULT_TYPE, poll_id, question):
     try:
+        logger.info(f"Handling poll results for poll ID: {poll_id}")
         poll = await context.bot.get_poll(poll_id=poll_id)
+        logger.info(f"Poll results: {poll}")
         for option in poll.options:
             if poll.options.index(option) == poll.correct_option_id:
+                logger.info(f"Correct option: {option}")
                 for user in option.voters:
+                    logger.info(f"User {user.user.id} voted correctly.")
                     if str(user.user.id) not in weekly_user_answers:
                         weekly_user_answers[str(user.user.id)] = {"username": user.user.first_name, "score": 0}
                     weekly_user_answers[str(user.user.id)]["score"] += 1
@@ -108,9 +112,9 @@ async def test_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     weekly_user_answers = {}
 
-    for question in weekly_questions[:3]: # Only 3 Questions now.
+    for question in weekly_questions[:3]:
         poll_id = await send_weekly_poll_question(context, question)
-        await asyncio.sleep(5)  # Wait for poll to close
+        await asyncio.sleep(30)  # Wait for poll to close
         await handle_poll_results(context, poll_id, question)
 
     await send_weekly_results(context)
