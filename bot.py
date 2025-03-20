@@ -120,8 +120,8 @@ def main():
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("testweekly", test_weekly))
 
-    # Using polling now
-    application.run_polling()
+    # Using polling now, and drop pending updates.
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
