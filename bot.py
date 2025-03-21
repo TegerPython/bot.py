@@ -696,4 +696,4 @@ def main():
                                logger.error(f"Error: {context.error}", exc_info=context.error))
 
     # Start the bot
-    port = int(os.environ.get("
+    port = int(os.environ.get)"
