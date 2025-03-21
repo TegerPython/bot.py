@@ -119,6 +119,7 @@ async def send_question(context, question_index):
         )
         
         logger.info(f"Question {question_index + 1} sent to channel and discussion group")
+        logger.info(f"Poll ID for question {question_index + 1}: {group_message.poll.id}")
         
         # Schedule next question after delay
         context.job_queue.run_once(
@@ -166,32 +167,47 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """Handle poll answers from discussion group members"""
     global weekly_test
     
-    poll_answer = update.poll_answer
-    user_id = poll_answer.user.id
-    user_name = poll_answer.user.full_name
-    poll_id = poll_answer.poll_id
-    
-    if not weekly_test.active:
-        return
-    
-    # Find which question this poll belongs to
-    question_index = None
-    for idx, p_id in weekly_test.poll_ids.items():
-        if p_id == poll_id:
-            question_index = idx
-            break
-    
-    if question_index is None:
-        return
-    
-    # Check if the user answered correctly
-    if poll_answer.option_ids:
-        selected_option = poll_answer.option_ids[0]
-        correct_option = weekly_test.questions[question_index]["correct_option"]
+    try:
+        poll_answer = update.poll_answer
+        poll_id = poll_answer.poll_id
         
-        if selected_option == correct_option:
-            weekly_test.add_point(user_id, user_name)
-            logger.info(f"User {user_name} answered question {question_index + 1} correctly")
+        # Debug logging
+        logger.info(f"Received poll answer for poll ID: {poll_id}")
+        logger.info(f"Current active poll IDs: {weekly_test.poll_ids}")
+        
+        if not weekly_test.active:
+            logger.info("Weekly test not active, ignoring poll answer")
+            return
+        
+        # Find which question this poll belongs to
+        question_index = None
+        for idx, p_id in weekly_test.poll_ids.items():
+            if p_id == poll_id:
+                question_index = idx
+                break
+        
+        if question_index is None:
+            logger.warning(f"Poll ID {poll_id} not found in tracked polls")
+            return
+        
+        # Get user information
+        user_id = poll_answer.user.id
+        user_name = poll_answer.user.full_name if hasattr(poll_answer.user, 'full_name') else f"User {user_id}"
+        
+        logger.info(f"Processing answer from user {user_name} (ID: {user_id})")
+        
+        # Check if the user answered correctly
+        if poll_answer.option_ids:
+            selected_option = poll_answer.option_ids[0]
+            correct_option = weekly_test.questions[question_index]["correct_option"]
+            
+            logger.info(f"User selected option {selected_option}, correct is {correct_option}")
+            
+            if selected_option == correct_option:
+                weekly_test.add_point(user_id, user_name)
+                logger.info(f"User {user_name} answered question {question_index + 1} correctly")
+    except Exception as e:
+        logger.error(f"Error handling poll answer: {e}")
 
 async def send_leaderboard_results(context):
     """Send the leaderboard results in a visually appealing format"""
@@ -201,6 +217,7 @@ async def send_leaderboard_results(context):
         return
     
     results = weekly_test.get_results()
+    logger.info(f"Preparing leaderboard with {len(results)} participants")
     
     # Create the leaderboard message
     message = "🏆 *WEEKLY TEST RESULTS* 🏆\n\n"
@@ -245,15 +262,9 @@ async def send_leaderboard_results(context):
         message += "No participants this week."
     
     try:
-        # Send results to both channel and discussion group
+        # Send results to channel only
         await context.bot.send_message(
             chat_id=CHANNEL_ID,
-            text=message,
-            parse_mode="Markdown"
-        )
-        
-        await context.bot.send_message(
-            chat_id=DISCUSSION_GROUP_ID,
             text=message,
             parse_mode="Markdown"
         )
@@ -304,14 +315,71 @@ async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"Error in weekly test command: {e}")
         await update.message.reply_text(f"Failed to start weekly test: {str(e)}")
 
+async def custom_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command handler for /customtest with specific questions"""
+    global weekly_test
+    
+    user_id = update.effective_user.id
+    
+    if user_id != OWNER_ID:
+        await update.message.reply_text("❌ Not authorized")
+        return
+    
+    try:
+        # Custom quiz questions (example)
+        custom_questions = [
+            {
+                "question": "What is the largest planet in our solar system?",
+                "options": ["Saturn", "Jupiter", "Neptune", "Uranus"],
+                "correct_option": 1
+            },
+            {
+                "question": "Which element has the chemical symbol 'Au'?",
+                "options": ["Silver", "Aluminum", "Gold", "Copper"],
+                "correct_option": 2
+            },
+            {
+                "question": "Who wrote 'Romeo and Juliet'?",
+                "options": ["Charles Dickens", "William Shakespeare", "Jane Austen", "Mark Twain"],
+                "correct_option": 1
+            }
+        ]
+        
+        # Reset and prepare the test
+        weekly_test.reset()
+        weekly_test.questions = custom_questions
+        weekly_test.active = True
+        
+        # Start the sequence with the first question
+        await update.message.reply_text("Starting custom test...")
+        
+        # Send announcement to discussion group
+        await context.bot.send_message(
+            chat_id=DISCUSSION_GROUP_ID,
+            text="🎮 *CUSTOM TEST STARTING* 🎮\n\nAnswer the questions that will appear here to participate in the leaderboard!",
+            parse_mode="Markdown"
+        )
+        
+        # Send first question
+        await send_question(context, 0)
+    
+    except Exception as e:
+        logger.error(f"Error in custom test command: {e}")
+        await update.message.reply_text(f"Failed to start custom test: {str(e)}")
+
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Add command handlers
     application.add_handler(CommandHandler("weeklytest", weekly_test_command))
+    application.add_handler(CommandHandler("customtest", custom_test_command))
     
     # Add poll answer handler
     application.add_handler(PollAnswerHandler(handle_poll_answer))
+    
+    # Register error handler
+    application.add_error_handler(lambda update, context: 
+                                 logger.error(f"Error: {context.error}", exc_info=context.error))
     
     # Start the bot
     if WEBHOOK_URL:
