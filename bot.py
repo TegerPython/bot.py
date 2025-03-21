@@ -672,7 +672,7 @@ def main():
     target_time = get_utc_time(18, 0, "Asia/Gaza")
     
     job_queue.run_daily(
-        weekly_test_command,
+        lambda context: asyncio.create_task(weekly_test_command(None, context)),
         time=target_time,
         days=(friday,),
         name="weekly_test"
@@ -693,7 +693,4 @@ def main():
 
     # Error handler
     application.add_error_handler(lambda update, context: 
-                               logger.error(f"Error: {context.error}", exc_info=context.error))
-
-    # Start the bot
-    port = int(os.environ.get)"
+                               logger.error(f"Error: {context.error}", exc_info=context.
