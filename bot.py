@@ -695,7 +695,9 @@ def main():
 
     # Error handler
 application.add_error_handler(lambda update, context: 
-                            logger.error(f"Error: {context.error}", exc_info=context.error))
-
+                               logger.error(f"Error: {context.error}", exc_info=context.error))
 # Start the bot
 application.run_polling()
+
+if __name__ == "__main__":
+    main()
