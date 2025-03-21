@@ -1,8 +1,8 @@
 import os
 import logging
 import asyncio
-from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
+from telegram import Update, Bot, Poll
+from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0"))
+DISCUSSION_GROUP_ID = int(os.getenv("DISCUSSION_GROUP_ID", "0"))  # Add discussion group ID
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.getenv("PORT", "8443"))
 
@@ -22,14 +23,16 @@ class WeeklyTest:
         self.current_question_index = 0
         self.participants = {}  # user_id -> {"name": name, "score": score}
         self.active = False
-        self.message_ids = []  # Store message IDs for each question
+        self.poll_ids = {}  # question_index -> poll_id
+        self.poll_messages = {}  # question_index -> poll_message_id (in discussion group)
 
     def reset(self):
         self.questions = []
         self.current_question_index = 0
         self.participants = {}
         self.active = False
-        self.message_ids = []
+        self.poll_ids = {}
+        self.poll_messages = {}
 
     def add_point(self, user_id, user_name):
         if user_id not in self.participants:
@@ -66,9 +69,8 @@ sample_questions = [
     }
 ]
 
-# Modified approach using discussion group alongside channel
 async def send_question(context, question_index):
-    """Send questions to the channel with inline buttons"""
+    """Send questions to both channel and discussion group"""
     global weekly_test
     
     if question_index >= len(weekly_test.questions):
@@ -83,108 +85,113 @@ async def send_question(context, question_index):
     question = weekly_test.questions[question_index]
     weekly_test.current_question_index = question_index
     
-    # Create inline keyboard with answer options
-    keyboard = []
-    row = []
-    for i, option in enumerate(question["options"]):
-        # Use a callback data format that includes the question index and option index
-        callback_data = f"q{question_index}_a{i}"
-        row.append(InlineKeyboardButton(option, callback_data=callback_data))
-        if (i + 1) % 2 == 0 or i == len(question["options"]) - 1:
-            keyboard.append(row)
-            row = []
-            
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
     try:
-        # Send question with options as buttons
-        message = await context.bot.send_message(
+        # 1. Send question to channel (anonymous poll)
+        channel_message = await context.bot.send_poll(
             chat_id=CHANNEL_ID,
-            text=f"❓ *Question {question_index + 1}* ❓\n\n{question['question']}",
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
+            question=f"❓ Question {question_index + 1}: {question['question']}",
+            options=question["options"],
+            is_anonymous=True,  # Must be true for channels
+            type=Poll.QUIZ,
+            correct_option_id=question["correct_option"],
+            explanation=f"The correct answer is: {question['options'][question['correct_option']]}",
+            open_period=15  # Close after 15 seconds
         )
         
-        weekly_test.message_ids.append(message.message_id)
-        logger.info(f"Question {question_index + 1} sent with inline keyboard")
+        # 2. Send the same poll to discussion group (non-anonymous)
+        group_message = await context.bot.send_poll(
+            chat_id=DISCUSSION_GROUP_ID,
+            question=f"❓ Question {question_index + 1}: {question['question']}",
+            options=question["options"],
+            is_anonymous=False,  # Non-anonymous to track users
+            protect_content=True,  # Prevent forwarding
+            allows_multiple_answers=False
+        )
+        
+        # Store the poll information
+        weekly_test.poll_ids[question_index] = group_message.poll.id
+        weekly_test.poll_messages[question_index] = group_message.message_id
+        
+        # Send announcement to discussion group linking to the question
+        await context.bot.send_message(
+            chat_id=DISCUSSION_GROUP_ID,
+            text=f"⚠️ Answer Question {question_index + 1} in the poll above. You have 15 seconds! Answers will be tracked for the leaderboard."
+        )
+        
+        logger.info(f"Question {question_index + 1} sent to channel and discussion group")
         
         # Schedule next question after delay
         context.job_queue.run_once(
             lambda ctx: asyncio.create_task(send_question(ctx, question_index + 1)),
-            15  # Wait 15 seconds before sending next question
+            20  # Send next question after 20 seconds
         )
         
-        # Schedule removal of buttons after 10 seconds
+        # Schedule poll closure in discussion group
         context.job_queue.run_once(
-            lambda ctx: asyncio.create_task(reveal_correct_answer(ctx, message.message_id, question_index)),
-            10  # Show correct answer after 10 seconds
+            lambda ctx: asyncio.create_task(stop_poll_and_check_answers(ctx, question_index)),
+            15  # Close poll after 15 seconds
         )
     except Exception as e:
         logger.error(f"Error sending question {question_index + 1}: {e}")
 
-async def reveal_correct_answer(context, message_id, question_index):
-    """Reveal the correct answer by editing the message"""
+async def stop_poll_and_check_answers(context, question_index):
+    """Stop the poll in discussion group and record correct answers"""
     global weekly_test
     
-    if question_index >= len(weekly_test.questions):
+    if question_index not in weekly_test.poll_messages:
         return
-        
+    
     question = weekly_test.questions[question_index]
     correct_option = question["correct_option"]
     
-    # Create the correct answer text
-    correct_text = f"❓ *Question {question_index + 1}* ❓\n\n{question['question']}\n\n"
-    correct_text += "⏱ *Time's up!* ⏱\n"
-    correct_text += f"✅ Correct answer: *{question['options'][correct_option]}*"
-    
     try:
-        # Edit the message to show correct answer
-        await context.bot.edit_message_text(
-            chat_id=CHANNEL_ID,
-            message_id=message_id,
-            text=correct_text,
+        # Stop the poll
+        poll = await context.bot.stop_poll(
+            chat_id=DISCUSSION_GROUP_ID,
+            message_id=weekly_test.poll_messages[question_index]
+        )
+        
+        # Send correct answer message
+        await context.bot.send_message(
+            chat_id=DISCUSSION_GROUP_ID,
+            text=f"✅ Correct answer: *{question['options'][correct_option]}*",
             parse_mode="Markdown"
         )
-        logger.info(f"Revealed correct answer for question {question_index + 1}")
+        
+        logger.info(f"Poll for question {question_index + 1} stopped")
     except Exception as e:
-        logger.error(f"Error revealing answer for question {question_index + 1}: {e}")
+        logger.error(f"Error stopping poll for question {question_index + 1}: {e}")
 
-async def handle_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle button clicks (answers) from discussion group members"""
+async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle poll answers from discussion group members"""
     global weekly_test
     
-    query = update.callback_query
-    user = query.from_user
-    user_id = user.id
-    user_name = user.full_name
+    poll_answer = update.poll_answer
+    user_id = poll_answer.user.id
+    user_name = poll_answer.user.full_name
+    poll_id = poll_answer.poll_id
     
-    # Parse the callback data to get question and answer
-    callback_data = query.data
-    try:
-        # Extract question index and answer index from callback data format "q{question_index}_a{answer_index}"
-        parts = callback_data.split('_')
-        question_index = int(parts[0][1:])  # Remove 'q' prefix
-        answer_index = int(parts[1][1:])    # Remove 'a' prefix
+    if not weekly_test.active:
+        return
+    
+    # Find which question this poll belongs to
+    question_index = None
+    for idx, p_id in weekly_test.poll_ids.items():
+        if p_id == poll_id:
+            question_index = idx
+            break
+    
+    if question_index is None:
+        return
+    
+    # Check if the user answered correctly
+    if poll_answer.option_ids:
+        selected_option = poll_answer.option_ids[0]
+        correct_option = weekly_test.questions[question_index]["correct_option"]
         
-        # Check if this is the current question
-        if weekly_test.active and question_index == weekly_test.current_question_index:
-            # Check if the answer is correct
-            correct_option = weekly_test.questions[question_index]["correct_option"]
-            if answer_index == correct_option:
-                weekly_test.add_point(user_id, user_name)
-                feedback = "✅ Correct!"
-            else:
-                feedback = "❌ Wrong!"
-                
-            # Acknowledge the answer
-            await query.answer(feedback)
-            logger.info(f"User {user_name} answered question {question_index + 1} with option {answer_index}")
-        else:
-            # Question timing has passed
-            await query.answer("Time's up for this question!")
-    except Exception as e:
-        logger.error(f"Error handling button click: {e}")
-        await query.answer("An error occurred with your answer")
+        if selected_option == correct_option:
+            weekly_test.add_point(user_id, user_name)
+            logger.info(f"User {user_name} answered question {question_index + 1} correctly")
 
 async def send_leaderboard_results(context):
     """Send the leaderboard results in a visually appealing format"""
@@ -238,9 +245,15 @@ async def send_leaderboard_results(context):
         message += "No participants this week."
     
     try:
-        # Send results to the channel
+        # Send results to both channel and discussion group
         await context.bot.send_message(
             chat_id=CHANNEL_ID,
+            text=message,
+            parse_mode="Markdown"
+        )
+        
+        await context.bot.send_message(
+            chat_id=DISCUSSION_GROUP_ID,
             text=message,
             parse_mode="Markdown"
         )
@@ -263,36 +276,26 @@ async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     try:
-        # Verify CHANNEL_ID is set and valid
-        if CHANNEL_ID == 0:
-            await update.message.reply_text("❌ CHANNEL_ID is not set in environment variables. Please set it and try again.")
-            logger.error("CHANNEL_ID environment variable not set")
-            return
-        
-        # Check if bot can access the channel
-        try:
-            channel_chat = await context.bot.get_chat(CHANNEL_ID)
-            logger.info(f"Successfully connected to channel: {channel_chat.title}")
-        except Exception as e:
-            await update.message.reply_text(f"❌ Cannot access channel with ID {CHANNEL_ID}. Make sure the bot is an admin of the channel and has proper permissions.")
-            logger.error(f"Failed to access channel: {e}")
+        # Verify CHANNEL_ID and DISCUSSION_GROUP_ID are set
+        if CHANNEL_ID == 0 or DISCUSSION_GROUP_ID == 0:
+            await update.message.reply_text("❌ CHANNEL_ID or DISCUSSION_GROUP_ID not set in environment variables.")
+            logger.error("Required environment variables not set")
             return
         
         # Reset and prepare the test
         weekly_test.reset()
-        
-        # For testing, use the hardcoded questions
-        # In production, you would uncomment the fetch from URL:
-        # import requests
-        # response = requests.get(os.getenv("WEEKLY_QUESTIONS_JSON_URL"))
-        # weekly_test.questions = response.json()
-        
-        # For testing, use the sample questions
         weekly_test.questions = sample_questions
         weekly_test.active = True
         
         # Start the sequence with the first question
-        await update.message.reply_text(f"Starting weekly test... Questions will be sent to channel: {channel_chat.title}")
+        await update.message.reply_text("Starting weekly test...")
+        
+        # Send announcement to discussion group
+        await context.bot.send_message(
+            chat_id=DISCUSSION_GROUP_ID,
+            text="🎮 *WEEKLY TEST STARTING* 🎮\n\nAnswer the questions that will appear here to participate in the leaderboard!",
+            parse_mode="Markdown"
+        )
         
         # Send first question
         await send_question(context, 0)
@@ -301,64 +304,14 @@ async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"Error in weekly test command: {e}")
         await update.message.reply_text(f"Failed to start weekly test: {str(e)}")
 
-async def custom_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Command handler for /customtest with specific questions"""
-    global weekly_test
-    
-    user_id = update.effective_user.id
-    
-    if user_id != OWNER_ID:
-        await update.message.reply_text("❌ Not authorized")
-        return
-    
-    try:
-        # Custom quiz questions (example)
-        custom_questions = [
-            {
-                "question": "What is the largest planet in our solar system?",
-                "options": ["Saturn", "Jupiter", "Neptune", "Uranus"],
-                "correct_option": 1
-            },
-            {
-                "question": "Which element has the chemical symbol 'Au'?",
-                "options": ["Silver", "Aluminum", "Gold", "Copper"],
-                "correct_option": 2
-            },
-            {
-                "question": "Who wrote 'Romeo and Juliet'?",
-                "options": ["Charles Dickens", "William Shakespeare", "Jane Austen", "Mark Twain"],
-                "correct_option": 1
-            }
-        ]
-        
-        # Reset and prepare the test
-        weekly_test.reset()
-        weekly_test.questions = custom_questions
-        weekly_test.active = True
-        
-        # Start the sequence with the first question
-        await update.message.reply_text("Starting custom test...")
-        
-        # Send first question
-        await send_question(context, 0)
-    
-    except Exception as e:
-        logger.error(f"Error in custom test command: {e}")
-        await update.message.reply_text(f"Failed to start custom test: {str(e)}")
-
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Add command handlers
     application.add_handler(CommandHandler("weeklytest", weekly_test_command))
-    application.add_handler(CommandHandler("customtest", custom_test_command))
     
-    # Add callback query handler for button clicks
-    application.add_handler(CallbackQueryHandler(handle_button_click))
-    
-    # Register error handler
-    application.add_error_handler(lambda update, context: 
-                                 logger.error(f"Error: {context.error}", exc_info=context.error))
+    # Add poll answer handler
+    application.add_handler(PollAnswerHandler(handle_poll_answer))
     
     # Start the bot
     if WEBHOOK_URL:
