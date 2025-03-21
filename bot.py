@@ -660,6 +660,8 @@ def get_utc_time(hour, minute, timezone_str):
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     job_queue = application.job_queue
+    
+    # Rest of the code...
 
     # Schedule daily questions
     job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
