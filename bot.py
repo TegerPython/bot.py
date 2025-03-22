@@ -178,17 +178,15 @@ def save_leaderboard():
     try:
         github_token = os.getenv("GITHUB_TOKEN")
         repo_owner = "TegerPython"
-        repo_name = "bot_data"  # Replace with your repository name
+        repo_name = "bot_data"
         file_path = "leaderboard.json"
 
-        # Get the current file's SHA for updating
         get_file_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
         headers = {"Authorization": f"token {github_token}", "Accept": "application/vnd.github.v3+json"}
         get_response = requests.get(get_file_url, headers=headers)
         get_response.raise_for_status()
         sha = get_response.json()["sha"]
 
-        # Update the file
         content = json.dumps(leaderboard, indent=4).encode("utf-8")
         encoded_content = base64.b64encode(content).decode("utf-8")
 
@@ -196,8 +194,8 @@ def save_leaderboard():
         data = {
             "message": "Update leaderboard",
             "content": encoded_content,
-            "sha": sha,
-            "branch": "main",  # Or your branch name
+            sha: sha,
+            "branch": "main",
         }
         update_response = requests.put(update_url, headers=headers, json=data)
         update_response.raise_for_status()
@@ -238,10 +236,12 @@ def save_weekly_leaderboard():
 
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
+        if update.message:
+            await update.message.reply_text("❌ You are not authorized to use this command.")
         return
     await send_question(context)
-    await update.message.reply_text("✅ Test question sent.")
+    if update.message:
+        await update.message.reply_text("✅ Test question sent.")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -249,10 +249,12 @@ async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
 
 async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
+        if update.message:
+            await update.message.reply_text("❌ You are not authorized to use this command.")
         return
     await context.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}")
-    await update.message.reply_text("✅ Webhook refreshed.")
+    if update.message:
+        await update.message.reply_text("✅ Webhook refreshed.")
 
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
@@ -291,14 +293,14 @@ async def send_weekly_questionnaire(context: ContextTypes.DEFAULT_TYPE):
         logger.error("No weekly questions available.")
         return
 
-    start_index = weekly_question_index * 10
-    end_index = min(start_index + 10, len(weekly_questions))
+    start_index = weekly_question_index * 3 # for test perpose 3 questions
+    end_index = min(start_index + 3, len(weekly_questions)) # for test perpose 3 questions
 
     if start_index >= len(weekly_questions):
         logger.info("All weekly questions have been used. Restarting from the beginning.")
         weekly_question_index = 0
         start_index = 0
-        end_index = min(10, len(weekly_questions))
+        end_index = min(3, len(weekly_questions)) #for test perpose 3 questions
 
     weekly_poll_message_ids = []
     weekly_user_answers = {}
@@ -312,18 +314,19 @@ async def send_weekly_questionnaire(context: ContextTypes.DEFAULT_TYPE):
                 options=question["options"],
                 type=Poll.QUIZ,
                 correct_option_id=question["correct_option"],
-                open_period=30  # 30 seconds
+                open_period=5,  # 5 seconds test perpose
+                is_anonymous=False # non anonymous poll to get user info
             )
             weekly_poll_message_ids.append(message.message_id)
-            time.sleep(30)  # Wait for 30 seconds
+            time.sleep(5)  # 5 seconds test perpose
         except Exception as e:
             logger.error(f"Error sending weekly poll {i + 1}: {e}")
 
-    weekly_question_index += 1  # Increment the index after sending 10 questions
-    context.job_queue.run_once(close_weekly_polls, 30 * 10)  # Close after 10 polls * 30 seconds
+    weekly_question_index += 1
+    context.job_queue.run_once(close_weekly_polls, 5 * 3) # for test perpose 3 questions * 5 seconds
 
 async def close_weekly_polls(context: ContextTypes.DEFAULT_TYPE):
-    global weekly_poll_message_ids, weekly_user_answers, weekly_leaderboard
+    global weekly_poll_message_ids, weekly_leaderboard
     for message_id in weekly_poll_message_ids:
         try:
             poll = await context.bot.stop_poll(chat_id=CHANNEL_ID, message_id=message_id)
@@ -337,6 +340,8 @@ async def close_weekly_polls(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Error closing weekly poll {message_id}: {e}")
     save_weekly_leaderboard()
+    await context.bot.send_message(chat_id=CHANNEL_ID, text="Weekly questions finished, here is the weekly leaderboard:")
+    await weekly_leaderboard_command(Update(message=context.bot.send_message(chat_id=CHANNEL_ID, text="")), context)
 
 async def handle_weekly_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     poll = update.poll
