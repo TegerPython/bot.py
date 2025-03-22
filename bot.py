@@ -1,6 +1,8 @@
 import os
 import logging
 import asyncio
+import json
+import aiohttp
 from telegram import Update, Bot, Poll, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler, CallbackQueryHandler
 
@@ -15,6 +17,8 @@ OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0"))
 DISCUSSION_GROUP_ID = int(os.getenv("DISCUSSION_GROUP_ID", "0"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.getenv("PORT", "8443"))
+WEEKLY_LEADERBOARD_JSON_URL = os.getenv("WEEKLY_LEADERBOARD_JSON_URL")
+WEEKLY_QUESTIONS_JSON_URL = os.getenv("WEEKLY_QUESTIONS_JSON_URL")
 
 # Test data structure
 class WeeklyTest:
@@ -72,6 +76,26 @@ sample_questions = [
         "correct_option": 1
     }
 ]
+
+async def fetch_questions_from_url():
+    """Fetch questions from external JSON URL"""
+    try:
+        if not WEEKLY_QUESTIONS_JSON_URL:
+            logger.warning("WEEKLY_QUESTIONS_JSON_URL not set, using sample questions")
+            return sample_questions
+            
+        async with aiohttp.ClientSession() as session:
+            async with session.get(WEEKLY_QUESTIONS_JSON_URL) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    logger.info(f"Fetched {len(data)} questions from external source")
+                    return data
+                else:
+                    logger.error(f"Failed to fetch questions: HTTP {response.status}")
+                    return sample_questions
+    except Exception as e:
+        logger.error(f"Error fetching questions: {e}")
+        return sample_questions
 
 async def send_channel_announcement(context):
     """Send announcement to channel with button to join discussion group"""
@@ -146,7 +170,7 @@ async def send_question(context, question_index):
             text=f"⚠️ Answer Question {question_index + 1} in the poll above. You have 15 seconds! Answers will be tracked for the leaderboard."
         )
         
-        # Notify channel that a question is live in the group
+        # Notify channel that a question is live in the group - ONLY NOTIFY, NO ANSWERS
         chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
         if not chat.invite_link:
             invite_link = await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)
@@ -202,19 +226,14 @@ async def stop_poll_and_check_answers(context, question_index):
             message_id=weekly_test.poll_messages[question_index]
         )
         
-        # Send correct answer message to discussion group
+        # Send correct answer message to discussion group only
         await context.bot.send_message(
             chat_id=DISCUSSION_GROUP_ID,
             text=f"✅ Correct answer: *{question['options'][correct_option]}*",
             parse_mode="Markdown"
         )
         
-        # Also send the correct answer to the channel
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=f"✅ Question {question_index + 1} answer: *{question['options'][correct_option]}*",
-            parse_mode="Markdown"
-        )
+        # No longer sending answers to channel - removed that code
         
         logger.info(f"Poll for question {question_index + 1} stopped")
     except Exception as e:
@@ -281,44 +300,37 @@ async def send_leaderboard_results(context):
     # Create the leaderboard message
     message = "🏆 *WEEKLY TEST RESULTS* 🏆\n\n"
     
-    # Display the podium (top 3) 
-    if len(results) >= 3:
-        # Second place (silver)
-        silver_id, silver_data = results[1]
-        silver_name = silver_data["name"]
-        silver_score = silver_data["score"]
-        
-        # First place (gold)
-        gold_id, gold_data = results[0]
-        gold_name = gold_data["name"]
-        gold_score = gold_data["score"]
-        
-        # Third place (bronze)
-        bronze_id, bronze_data = results[2]
-        bronze_name = bronze_data["name"]
-        bronze_score = bronze_data["score"]
-        
-        # Create the podium display
-        message += "      🥇\n"
-        message += f"      {gold_name}\n"
-        message += f"      {gold_score} pts\n"
-        message += "  🥈         🥉\n"
-        message += f"  {silver_name}    {bronze_name}\n"
-        message += f"  {silver_score} pts    {bronze_score} pts\n\n"
-        
-        # Other participants
-        if len(results) > 3:
-            message += "*Other participants:*\n"
-            for i, (user_id, data) in enumerate(results[3:], start=4):
-                message += f"{i}. {data['name']} - {data['score']} pts\n"
-    
-    # If we have fewer than 3 participants
-    elif len(results) > 0:
+    # New leaderboard format with centered emojis for top places
+    if len(results) > 0:
         for i, (user_id, data) in enumerate(results, start=1):
-            medal = "🥇" if i == 1 else "🥈" if i == 2 else ""
-            message += f"{medal} {i}. {data['name']} - {data['score']} pts\n"
+            if i == 1:
+                message += f"🥇 *{data['name']}* 🥇 - {data['score']} pts\n"
+            elif i == 2:
+                message += f"🥈 *{data['name']}* 🥈 - {data['score']} pts\n"
+            elif i == 3:
+                message += f"🥉 *{data['name']}* 🥉 - {data['score']} pts\n"
+            else:
+                message += f"{i}. {data['name']} - {data['score']} pts\n"
     else:
         message += "No participants this week."
+    
+    # Try to save leaderboard to external URL if configured
+    if WEEKLY_LEADERBOARD_JSON_URL:
+        try:
+            leaderboard_data = [
+                {"rank": i, "name": data["name"], "score": data["score"]}
+                for i, (user_id, data) in enumerate(results, start=1)
+            ]
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(WEEKLY_LEADERBOARD_JSON_URL, 
+                                        json=leaderboard_data) as response:
+                    if response.status == 200:
+                        logger.info("Saved leaderboard to external URL")
+                    else:
+                        logger.error(f"Failed to save leaderboard: HTTP {response.status}")
+        except Exception as e:
+            logger.error(f"Error saving leaderboard to external URL: {e}")
     
     try:
         # Send results to both channel and discussion group
@@ -358,9 +370,12 @@ async def schedule_test_command(update: Update, context: ContextTypes.DEFAULT_TY
             logger.error("Required environment variables not set")
             return
         
+        # Fetch questions from external URL
+        questions = await fetch_questions_from_url()
+        
         # Reset and prepare the test
         weekly_test.reset()
-        weekly_test.questions = sample_questions
+        weekly_test.questions = questions
         weekly_test.scheduled = True
         
         # Send immediate confirmation
@@ -430,9 +445,12 @@ async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.error("Required environment variables not set")
             return
         
+        # Fetch questions from external URL
+        questions = await fetch_questions_from_url()
+        
         # Reset and prepare the test
         weekly_test.reset()
-        weekly_test.questions = sample_questions
+        weekly_test.questions = questions
         weekly_test.active = True
         
         # Start the sequence with the first question
