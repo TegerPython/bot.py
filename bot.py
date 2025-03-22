@@ -5,11 +5,10 @@ import json
 import requests
 import time
 from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll, ChatPermissions
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue, PollAnswerHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue
 import pytz
 import base64
-import asyncio
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -20,13 +19,11 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 logger.info(f"BOT_TOKEN: {BOT_TOKEN}")
 
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
-DISCUSSION_GROUP_ID = int(os.getenv("DISCUSSION_GROUP_ID"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
 LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
 WEEKLY_QUESTIONS_JSON_URL = os.getenv("WEEKLY_QUESTIONS_JSON_URL")
-WEEKLY_LEADERBOARD_JSON_URL = os.getenv("WEEKLY_LEADERBOARD_JSON_URL")
 
 # Global variables
 questions = []
@@ -35,7 +32,6 @@ current_question = None
 current_message_id = None
 user_answers = {}
 weekly_questions = []
-weekly_leaderboard = {}
 weekly_question_index = 0
 weekly_poll_message_ids = []
 weekly_user_answers = {}
@@ -86,25 +82,9 @@ def load_weekly_questions():
     except Exception as e:
         logger.error(f"Error loading weekly questions: {e}")
 
-# Load Weekly Leaderboard from URL
-def load_weekly_leaderboard():
-    global weekly_leaderboard
-    try:
-        response = requests.get(WEEKLY_LEADERBOARD_JSON_URL)
-        response.raise_for_status()
-        weekly_leaderboard = response.json()
-        logger.info(f"Loaded weekly leaderboard from {WEEKLY_LEADERBOARD_JSON_URL}")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error fetching weekly leaderboard from {WEEKLY_LEADERBOARD_JSON_URL}: {e}")
-    except json.JSONDecodeError:
-        logger.error(f"Error decoding weekly leaderboard from {WEEKLY_LEADERBOARD_JSON_URL}")
-    except Exception as e:
-        logger.error(f"Error loading weekly leaderboard: {e}")
-
 load_questions()
 load_leaderboard()
 load_weekly_questions()
-load_weekly_leaderboard()
 
 async def send_question(context: ContextTypes.DEFAULT_TYPE):
     global current_question, answered_users, current_message_id
@@ -179,16 +159,18 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def save_leaderboard():
     try:
         github_token = os.getenv("GITHUB_TOKEN")
-        repo_owner = "TegerPython"
-        repo_name = "bot_data"
+        repo_owner = "TegerPython"  # Replace with your GitHub username
+        repo_name = "bot_data"  # Replace with your repository name
         file_path = "leaderboard.json"
 
+        # Get the current file's SHA for updating
         get_file_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
         headers = {"Authorization": f"token {github_token}", "Accept": "application/vnd.github.v3+json"}
         get_response = requests.get(get_file_url, headers=headers)
         get_response.raise_for_status()
         sha = get_response.json()["sha"]
 
+        # Update the file
         content = json.dumps(leaderboard, indent=4).encode("utf-8")
         encoded_content = base64.b64encode(content).decode("utf-8")
 
@@ -197,7 +179,7 @@ def save_leaderboard():
             "message": "Update leaderboard",
             "content": encoded_content,
             "sha": sha,
-            "branch": "main",
+            "branch": "main",  # Or your branch name
         }
         update_response = requests.put(update_url, headers=headers, json=data)
         update_response.raise_for_status()
@@ -206,44 +188,12 @@ def save_leaderboard():
     except Exception as e:
         logger.error(f"Error saving leaderboard to GitHub: {e}")
 
-def save_weekly_leaderboard():
-    try:
-        github_token = os.getenv("GITHUB_TOKEN")
-        repo_owner = "TegerPython"
-        repo_name = "bot_data"
-        file_path = "weekly_leaderboard.json"
-
-        get_file_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
-        headers = {"Authorization": f"token {github_token}", "Accept": "application/vnd.github.v3+json"}
-        get_response = requests.get(get_file_url, headers=headers)
-        get_response.raise_for_status()
-        sha = get_response.json()["sha"]
-
-        content = json.dumps(weekly_leaderboard, indent=4).encode("utf-8")
-        encoded_content = base64.b64encode(content).decode("utf-8")
-
-        update_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
-        data = {
-            "message": "Update weekly leaderboard",
-            "content": encoded_content,
-            "sha": sha,
-            "branch": "main",
-        }
-        update_response = requests.put(update_url, headers=headers, json=data)
-        update_response.raise_for_status()
-
-        logger.info("Weekly leaderboard saved successfully to GitHub.")
-    except Exception as e:
-        logger.error(f"Error saving weekly leaderboard to GitHub: {e}")
-
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
-        if update.message:
-            await update.message.reply_text("❌ You are not authorized to use this command.")
+        await update.message.reply_text("❌ You are not authorized to use this command.")
         return
     await send_question(context)
-    if update.message:
-        await update.message.reply_text("✅ Test question sent.")
+    await update.message.reply_text("✅ Test question sent.")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -251,12 +201,10 @@ async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
 
 async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != OWNER_ID:
-        if update.message:
-            await update.message.reply_text("❌ You are not authorized to use this command.")
+        await update.message.reply_text("❌ You are not authorized to use this command.")
         return
     await context.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}")
-    if update.message:
-        await update.message.reply_text("✅ Webhook refreshed.")
+    await update.message.reply_text("✅ Webhook refreshed.")
 
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
@@ -273,36 +221,21 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"Error in leaderboard_command: {e}")
         await update.message.reply_text("❌ Failed to display leaderboard.")
 
-async def weekly_leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    try:
-        logger.info(f"Weekly Leaderboard data: {weekly_leaderboard}")
-        sorted_leaderboard = sorted(weekly_leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
-        leaderboard_text = "🏆 Weekly Leaderboard 🏆\n\n"
-        for rank, (user_id, player) in enumerate(sorted_leaderboard, start=1):
-            leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
-        await update.message.reply_text(leaderboard_text)
-    except KeyError as e:
-        logger.error(f"Error in weekly_leaderboard_command: KeyError - {e}")
-        await update.message.reply_text("❌ Failed to display weekly leaderboard due to data error.")
-    except Exception as e:
-        logger.error(f"Error in weekly_leaderboard_command: {e}")
-        await update.message.reply_text("❌ Failed to display weekly leaderboard.")
-
 async def send_weekly_questionnaire(context: ContextTypes.DEFAULT_TYPE):
-    global weekly_poll_message_ids, weekly_user_answers, weekly_question_index, weekly_leaderboard
+    global weekly_poll_message_ids, weekly_user_answers, weekly_question_index
 
     if not weekly_questions:
         logger.error("No weekly questions available.")
         return
 
-    start_index = weekly_question_index * 3  # for test purposes 3 questions
-    end_index = min(start_index + 3, len(weekly_questions))  # for test purposes 3 questions
+    start_index = weekly_question_index * 10
+    end_index = min(start_index + 10, len(weekly_questions))
 
     if start_index >= len(weekly_questions):
         logger.info("All weekly questions have been used. Restarting from the beginning.")
         weekly_question_index = 0
         start_index = 0
-        end_index = min(3, len(weekly_questions))  # for test purposes 3 questions
+        end_index = min(10, len(weekly_questions))
 
     weekly_poll_message_ids = []
     weekly_user_answers = {}
@@ -310,48 +243,29 @@ async def send_weekly_questionnaire(context: ContextTypes.DEFAULT_TYPE):
     for i in range(start_index, end_index):
         try:
             question = weekly_questions[i]
-            poll_message = await context.bot.send_poll(
-                chat_id=DISCUSSION_GROUP_ID,
+            message = await context.bot.send_poll(
+                chat_id=CHANNEL_ID,
                 question=question["question"],
                 options=question["options"],
                 type=Poll.QUIZ,
                 correct_option_id=question["correct_option"],
-                open_period=5,  # 5 seconds test purposes
-                is_anonymous=False  # non anonymous poll to get user info
+                open_period=30  # 30 seconds
             )
-            weekly_poll_message_ids.append(poll_message.message_id)
-
-            # Send a channel message with a deep link to the poll in the group
-            group_link = f"tg://resolve?domain={context.bot.get_chat(DISCUSSION_GROUP_ID).username}&poll={poll_message.message_id}"
-            await context.bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=f"New weekly question! Participate here: {group_link}"
-            )
-
-            time.sleep(5)  # 5 seconds test purposes
+            weekly_poll_message_ids.append(message.message_id)
+            time.sleep(30)  # Wait for 30 seconds
         except Exception as e:
             logger.error(f"Error sending weekly poll {i + 1}: {e}")
 
-    weekly_question_index += 1
-    context.job_queue.run_once(close_weekly_polls, 5 * 3)  # for test purposes 3 questions * 5 seconds
+    weekly_question_index += 1  # Increment the index after sending 10 questions
+    context.job_queue.run_once(close_weekly_polls, 30 * 10)  # Close after 10 polls * 30 seconds
 
 async def close_weekly_polls(context: ContextTypes.DEFAULT_TYPE):
-    global weekly_poll_message_ids, weekly_leaderboard
+    global weekly_poll_message_ids, weekly_user_answers
     for message_id in weekly_poll_message_ids:
         try:
-            poll = await context.bot.stop_poll(chat_id=DISCUSSION_GROUP_ID, message_id=message_id)
-            for option in poll.options:
-                if option.is_chosen:
-                    for user in option.voters:
-                        if poll.options.index(option) == poll.correct_option_id:
-                            if str(user.id) not in weekly_leaderboard:
-                                weekly_leaderboard[str(user.id)] = {"username": user.first_name, "score": 0}
-                            weekly_leaderboard[str(user.id)]["score"] += 1
+            await context.bot.stop_poll(chat_id=CHANNEL_ID, message_id=message_id)
         except Exception as e:
             logger.error(f"Error closing weekly poll {message_id}: {e}")
-    save_weekly_leaderboard()
-    await context.bot.send_message(chat_id=CHANNEL_ID, text="Weekly questions finished, here is the weekly leaderboard:")
-    await weekly_leaderboard_command(Update(update_id=1, message=context.bot.send_message(chat_id=CHANNEL_ID, text="")), context)
 
 async def handle_weekly_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     poll = update.poll
@@ -402,8 +316,7 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_answer))
     application.add_handler(CommandHandler("setwebhook", set_webhook))
     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
-    application.add_handler(CommandHandler("weeklyleaderboard", weekly_leaderboard_command))
-    application.add_handler(PollAnswerHandler(handle_weekly_poll_answer))
+    application.add_handler(CallbackQueryHandler(handle_weekly_poll_answer))
     application.add_handler(CommandHandler("testweekly", test_weekly))
 
     port = int(os.environ.get("PORT", 5000))
@@ -414,8 +327,6 @@ def main():
         url_path=BOT_TOKEN,
         webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
     )
-    application.add_error_handler(lambda update, context: logger.warning(f'Update {update} caused error {context.error}'))
-    application.run_polling()
 
 if __name__ == "__main__":
     main()
