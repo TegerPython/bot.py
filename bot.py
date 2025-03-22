@@ -357,7 +357,6 @@ async def send_weekly_test_question(context, question_index):
             open_period=15  # Close after 15 seconds
         )
 
-        # 2. Send the same poll to discussion group (non-anonymous)
         group_message = await context.bot.send_poll(
             chat_id=DISCUSSION_GROUP_ID,
             question=f"❓ Weekly Test Question {question_index + 1}: {question['question']}",
@@ -671,7 +670,7 @@ def main():
 
     # Schedule daily questions
     job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
-    job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
+    job_queue.run_daily(send_question, get_utc_time(12, 10, "Asia/Gaza"), name="second_question") # changed to 12:10
     job_queue.run_daily(send_question, get_utc_time(18, 0, "Asia/Gaza"))
 
     # Schedule weekly test
