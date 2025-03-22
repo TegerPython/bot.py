@@ -194,7 +194,7 @@ def save_leaderboard():
         data = {
             "message": "Update leaderboard",
             "content": encoded_content,
-            sha: sha,
+            "sha": sha,
             "branch": "main",
         }
         update_response = requests.put(update_url, headers=headers, json=data)
@@ -293,14 +293,14 @@ async def send_weekly_questionnaire(context: ContextTypes.DEFAULT_TYPE):
         logger.error("No weekly questions available.")
         return
 
-    start_index = weekly_question_index * 3 # for test perpose 3 questions
-    end_index = min(start_index + 3, len(weekly_questions)) # for test perpose 3 questions
+    start_index = weekly_question_index * 3  # for test perpose 3 questions
+    end_index = min(start_index + 3, len(weekly_questions))  # for test perpose 3 questions
 
     if start_index >= len(weekly_questions):
         logger.info("All weekly questions have been used. Restarting from the beginning.")
         weekly_question_index = 0
         start_index = 0
-        end_index = min(3, len(weekly_questions)) #for test perpose 3 questions
+        end_index = min(3, len(weekly_questions))  # for test perpose 3 questions
 
     weekly_poll_message_ids = []
     weekly_user_answers = {}
@@ -315,7 +315,7 @@ async def send_weekly_questionnaire(context: ContextTypes.DEFAULT_TYPE):
                 type=Poll.QUIZ,
                 correct_option_id=question["correct_option"],
                 open_period=5,  # 5 seconds test perpose
-                is_anonymous=False # non anonymous poll to get user info
+                is_anonymous=False  # non anonymous poll to get user info
             )
             weekly_poll_message_ids.append(message.message_id)
             time.sleep(5)  # 5 seconds test perpose
@@ -323,7 +323,7 @@ async def send_weekly_questionnaire(context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Error sending weekly poll {i + 1}: {e}")
 
     weekly_question_index += 1
-    context.job_queue.run_once(close_weekly_polls, 5 * 3) # for test perpose 3 questions * 5 seconds
+    context.job_queue.run_once(close_weekly_polls, 5 * 3)  # for test perpose 3 questions * 5 seconds
 
 async def close_weekly_polls(context: ContextTypes.DEFAULT_TYPE):
     global weekly_poll_message_ids, weekly_leaderboard
