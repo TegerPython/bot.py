@@ -248,13 +248,15 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
         
         # Get user information
-        user_id = poll_answer.user.id
-        user_name = poll_answer.user.full_name if hasattr(poll_answer.user, 'full_name') else f"User {user_id}"
+        user = poll_answer.user
+        user_id = user.id
+        user_name = user.full_name if hasattr(user, 'full_name') else (
+            user.username if hasattr(user, 'username') else f"User {user_id}")
         
         logger.info(f"Processing answer from user {user_name} (ID: {user_id})")
         
         # Check if the user answered correctly
-        if poll_answer.option_ids:
+        if len(poll_answer.option_ids) > 0:  # Ensure user selected an option
             selected_option = poll_answer.option_ids[0]
             correct_option = weekly_test.questions[question_index]["correct_option"]
             
@@ -264,7 +266,7 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 weekly_test.add_point(user_id, user_name)
                 logger.info(f"User {user_name} answered question {question_index + 1} correctly")
     except Exception as e:
-        logger.error(f"Error handling poll answer: {e}")
+        logger.error(f"Error handling poll answer: {e}", exc_info=True)
 
 async def send_leaderboard_results(context):
     """Send the leaderboard results in a visually appealing format"""
