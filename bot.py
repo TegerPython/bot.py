@@ -19,7 +19,7 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 logger.info(f"BOT_TOKEN: {BOT_TOKEN}")
 
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
-GROUP_ID = int(os.getenv("GROUP_ID"))
+DISCUSSION_GROUP_ID = int(os.getenv("DISCUSSION_GROUP_ID"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
@@ -272,6 +272,21 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"Error in leaderboard_command: {e}")
         await update.message.reply_text("❌ Failed to display leaderboard.")
 
+async def weekly_leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        logger.info(f"Weekly Leaderboard data: {weekly_leaderboard}")
+        sorted_leaderboard = sorted(weekly_leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
+        leaderboard_text = "🏆 Weekly Leaderboard 🏆\n\n"
+        for rank, (user_id, player) in enumerate(sorted_leaderboard, start=1):
+            leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
+        await update.message.reply_text(leaderboard_text)
+    except KeyError as e:
+        logger.error(f"Error in weekly_leaderboard_command: KeyError - {e}")
+        await update.message.reply_text("❌ Failed to display weekly leaderboard due to data error.")
+    except Exception as e:
+        logger.error(f"Error in weekly_leaderboard_command: {e}")
+        await update.message.reply_text("❌ Failed to display weekly leaderboard.")
+
 async def send_weekly_questionnaire(context: ContextTypes.DEFAULT_TYPE):
     global weekly_poll_message_ids, weekly_user_answers, weekly_question_index, weekly_leaderboard
 
@@ -295,7 +310,7 @@ async def send_weekly_questionnaire(context: ContextTypes.DEFAULT_TYPE):
         try:
             question = weekly_questions[i]
             poll_message = await context.bot.send_poll(
-                chat_id=GROUP_ID,
+                chat_id=DISCUSSION_GROUP_ID,
                 question=question["question"],
                 options=question["options"],
                 type=Poll.QUIZ,
@@ -306,7 +321,7 @@ async def send_weekly_questionnaire(context: ContextTypes.DEFAULT_TYPE):
             weekly_poll_message_ids.append(poll_message.message_id)
 
             # Send a channel message with a deep link to the poll in the group
-            group_link = f"tg://resolve?domain={context.bot.get_chat(GROUP_ID).username}&poll={poll_message.message_id}"
+            group_link = f"tg://resolve?domain={context.bot.get_chat(DISCUSSION_GROUP_ID).username}&poll={poll_message.message_id}"
             await context.bot.send_message(
                 chat_id=CHANNEL_ID,
                 text=f"New weekly question! Participate here: {group_link}"
@@ -323,7 +338,7 @@ async def close_weekly_polls(context: ContextTypes.DEFAULT_TYPE):
     global weekly_poll_message_ids, weekly_leaderboard
     for message_id in weekly_poll_message_ids:
         try:
-            poll = await context.bot.stop_poll(chat_id=GROUP_ID, message_id=message_id)
+            poll = await context.bot.stop_poll(chat_id=DISCUSSION_GROUP_ID, message_id=message_id)
             for option in poll.options:
                 if option.is_chosen:
                     for user in option.voters:
@@ -401,4 +416,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    start_index = weekly_question_index * 3
