@@ -350,7 +350,7 @@ async def close_weekly_polls(context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Error closing weekly poll {message_id}: {e}")
     save_weekly_leaderboard()
     await context.bot.send_message(chat_id=CHANNEL_ID, text="Weekly questions finished, here is the weekly leaderboard:")
-    await weekly_leaderboard_command(Update(message=context.bot.send_message(chat_id=CHANNEL_ID, text="")), context)
+    await weekly_leaderboard_command(Update(update_id=1, message=context.bot.send_message(chat_id=CHANNEL_ID, text="")), context)
 
 async def handle_weekly_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     poll = update.poll
