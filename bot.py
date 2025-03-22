@@ -2,7 +2,7 @@ import os
 import logging
 import asyncio
 from telegram import Update, Bot, Poll
-from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler
+from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler, MessageHandler, filters
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0"))
-DISCUSSION_GROUP_ID = int(os.getenv("DISCUSSION_GROUP_ID", "0"))  # Add discussion group ID
+DISCUSSION_GROUP_ID = int(os.getenv("DISCUSSION_GROUP_ID", "0"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.getenv("PORT", "8443"))
 
@@ -23,8 +23,9 @@ class WeeklyTest:
         self.current_question_index = 0
         self.participants = {}  # user_id -> {"name": name, "score": score}
         self.active = False
-        self.poll_ids = {}  # question_index -> poll_id
-        self.poll_messages = {}  # question_index -> poll_message_id (in discussion group)
+        self.poll_ids = {}  # question_index -> {"channel": poll_id, "group": poll_id}
+        self.poll_messages = {}  # question_index -> {"channel": message_id, "group": message_id}
+        self.user_answers = {}  # user_id -> {question_index: option_id}
 
     def reset(self):
         self.questions = []
@@ -33,6 +34,7 @@ class WeeklyTest:
         self.active = False
         self.poll_ids = {}
         self.poll_messages = {}
+        self.user_answers = {}
 
     def add_point(self, user_id, user_name):
         if user_id not in self.participants:
@@ -86,6 +88,10 @@ async def send_question(context, question_index):
     weekly_test.current_question_index = question_index
     
     try:
+        # Initialize storage for this question
+        weekly_test.poll_ids[question_index] = {}
+        weekly_test.poll_messages[question_index] = {}
+        
         # 1. Send question to channel (anonymous poll)
         channel_message = await context.bot.send_poll(
             chat_id=CHANNEL_ID,
@@ -98,6 +104,10 @@ async def send_question(context, question_index):
             open_period=15  # Close after 15 seconds
         )
         
+        # Store channel poll info
+        weekly_test.poll_ids[question_index]["channel"] = channel_message.poll.id
+        weekly_test.poll_messages[question_index]["channel"] = channel_message.message_id
+        
         # 2. Send the same poll to discussion group (non-anonymous)
         group_message = await context.bot.send_poll(
             chat_id=DISCUSSION_GROUP_ID,
@@ -108,18 +118,18 @@ async def send_question(context, question_index):
             allows_multiple_answers=False
         )
         
-        # Store the poll information
-        weekly_test.poll_ids[question_index] = group_message.poll.id
-        weekly_test.poll_messages[question_index] = group_message.message_id
+        # Store group poll info
+        weekly_test.poll_ids[question_index]["group"] = group_message.poll.id
+        weekly_test.poll_messages[question_index]["group"] = group_message.message_id
         
-        # Send announcement to discussion group linking to the question
+        # Send announcement to discussion group linking to the poll
         await context.bot.send_message(
             chat_id=DISCUSSION_GROUP_ID,
             text=f"⚠️ Answer Question {question_index + 1} in the poll above. You have 15 seconds! Answers will be tracked for the leaderboard."
         )
         
         logger.info(f"Question {question_index + 1} sent to channel and discussion group")
-        logger.info(f"Poll ID for question {question_index + 1}: {group_message.poll.id}")
+        logger.info(f"Poll IDs for question {question_index + 1}: Channel={channel_message.poll.id}, Group={group_message.poll.id}")
         
         # Schedule next question after delay
         context.job_queue.run_once(
@@ -136,7 +146,7 @@ async def send_question(context, question_index):
         logger.error(f"Error sending question {question_index + 1}: {e}")
 
 async def stop_poll_and_check_answers(context, question_index):
-    """Stop the poll in discussion group and record correct answers"""
+    """Stop the polls in both channel and discussion group and record correct answers"""
     global weekly_test
     
     if question_index not in weekly_test.poll_messages:
@@ -146,135 +156,94 @@ async def stop_poll_and_check_answers(context, question_index):
     correct_option = question["correct_option"]
     
     try:
-        # Stop the poll
-        poll = await context.bot.stop_poll(
-            chat_id=DISCUSSION_GROUP_ID,
-            message_id=weekly_test.poll_messages[question_index]
-        )
+        # Stop the polls
+        if "group" in weekly_test.poll_messages[question_index]:
+            await context.bot.stop_poll(
+                chat_id=DISCUSSION_GROUP_ID,
+                message_id=weekly_test.poll_messages[question_index]["group"]
+            )
+            logger.info(f"Poll for question {question_index + 1} stopped in discussion group")
         
-        # Send correct answer message
+        if "channel" in weekly_test.poll_messages[question_index]:
+            await context.bot.stop_poll(
+                chat_id=CHANNEL_ID,
+                message_id=weekly_test.poll_messages[question_index]["channel"]
+            )
+            logger.info(f"Poll for question {question_index + 1} stopped in channel")
+        
+        # Send correct answer message to discussion group
         await context.bot.send_message(
             chat_id=DISCUSSION_GROUP_ID,
             text=f"✅ Correct answer: *{question['options'][correct_option]}*",
             parse_mode="Markdown"
         )
         
-        logger.info(f"Poll for question {question_index + 1} stopped")
     except Exception as e:
-        logger.error(f"Error stopping poll for question {question_index + 1}: {e}")
+        logger.error(f"Error stopping polls for question {question_index + 1}: {e}")
 
 async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle poll answers from discussion group members"""
+    """Handle poll answers and synchronize between channel and group polls"""
     global weekly_test
     
     try:
         poll_answer = update.poll_answer
         poll_id = poll_answer.poll_id
+        user_id = poll_answer.user.id
+        user_name = poll_answer.user.full_name if hasattr(poll_answer.user, 'full_name') else f"User {user_id}"
         
-        # Debug logging
-        logger.info(f"Received poll answer for poll ID: {poll_id}")
-        logger.info(f"Current active poll IDs: {weekly_test.poll_ids}")
+        logger.info(f"Received poll answer from {user_name} (ID: {user_id}) for poll ID: {poll_id}")
         
         if not weekly_test.active:
             logger.info("Weekly test not active, ignoring poll answer")
             return
         
-        # Find which question this poll belongs to
+        # Find which question this poll belongs to and whether it's from channel or group
         question_index = None
-        for idx, p_id in weekly_test.poll_ids.items():
-            if p_id == poll_id:
+        poll_source = None
+        
+        for idx, poll_ids in weekly_test.poll_ids.items():
+            if "channel" in poll_ids and poll_ids["channel"] == poll_id:
                 question_index = idx
+                poll_source = "channel"
+                break
+            elif "group" in poll_ids and poll_ids["group"] == poll_id:
+                question_index = idx
+                poll_source = "group"
                 break
         
         if question_index is None:
             logger.warning(f"Poll ID {poll_id} not found in tracked polls")
             return
         
-        # Get user information
-        user_id = poll_answer.user.id
-        user_name = poll_answer.user.full_name if hasattr(poll_answer.user, 'full_name') else f"User {user_id}"
+        logger.info(f"Poll answer belongs to question {question_index + 1} from {poll_source}")
         
-        logger.info(f"Processing answer from user {user_name} (ID: {user_id})")
+        # If no option selected (user retracted vote), return
+        if not poll_answer.option_ids:
+            logger.info(f"User {user_name} retracted their vote")
+            return
         
-        # Check if the user answered correctly
-        if poll_answer.option_ids:
-            selected_option = poll_answer.option_ids[0]
-            correct_option = weekly_test.questions[question_index]["correct_option"]
-            
-            logger.info(f"User selected option {selected_option}, correct is {correct_option}")
-            
-            if selected_option == correct_option:
-                weekly_test.add_point(user_id, user_name)
-                logger.info(f"User {user_name} answered question {question_index + 1} correctly")
+        selected_option = poll_answer.option_ids[0]
+        correct_option = weekly_test.questions[question_index]["correct_option"]
+        
+        # Store user's answer
+        if user_id not in weekly_test.user_answers:
+            weekly_test.user_answers[user_id] = {}
+        
+        weekly_test.user_answers[user_id][question_index] = selected_option
+        
+        # Check if answer is correct
+        if selected_option == correct_option:
+            weekly_test.add_point(user_id, user_name)
+            logger.info(f"User {user_name} answered question {question_index + 1} correctly")
+        
+        # If answer came from discussion group, we need to put the same answer in the channel poll
+        # But this is not possible because channel polls are anonymous
+        # Instead, we could track and simulate results for analytics
+        
+        logger.info(f"User {user_name} selected option {selected_option} for question {question_index + 1}")
+        
     except Exception as e:
         logger.error(f"Error handling poll answer: {e}")
-
-async def send_leaderboard_results(context):
-    """Send the leaderboard results in a visually appealing format"""
-    global weekly_test
-    
-    if not weekly_test.active:
-        return
-    
-    results = weekly_test.get_results()
-    logger.info(f"Preparing leaderboard with {len(results)} participants")
-    
-    # Create the leaderboard message
-    message = "🏆 *WEEKLY TEST RESULTS* 🏆\n\n"
-    
-    # Display the podium (top 3) 
-    if len(results) >= 3:
-        # Second place (silver)
-        silver_id, silver_data = results[1]
-        silver_name = silver_data["name"]
-        silver_score = silver_data["score"]
-        
-        # First place (gold)
-        gold_id, gold_data = results[0]
-        gold_name = gold_data["name"]
-        gold_score = gold_data["score"]
-        
-        # Third place (bronze)
-        bronze_id, bronze_data = results[2]
-        bronze_name = bronze_data["name"]
-        bronze_score = bronze_data["score"]
-        
-        # Create the podium display
-        message += "      🥇\n"
-        message += f"      {gold_name}\n"
-        message += f"      {gold_score} pts\n"
-        message += "  🥈         🥉\n"
-        message += f"  {silver_name}    {bronze_name}\n"
-        message += f"  {silver_score} pts    {bronze_score} pts\n\n"
-        
-        # Other participants
-        if len(results) > 3:
-            message += "*Other participants:*\n"
-            for i, (user_id, data) in enumerate(results[3:], start=4):
-                message += f"{i}. {data['name']} - {data['score']} pts\n"
-    
-    # If we have fewer than 3 participants
-    elif len(results) > 0:
-        for i, (user_id, data) in enumerate(results, start=1):
-            medal = "🥇" if i == 1 else "🥈" if i == 2 else ""
-            message += f"{medal} {i}. {data['name']} - {data['score']} pts\n"
-    else:
-        message += "No participants this week."
-    
-    try:
-        # Send results to channel only
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=message,
-            parse_mode="Markdown"
-        )
-        
-        logger.info("Leaderboard results sent successfully")
-        
-        # Reset the test after sending results
-        weekly_test.active = False
-    except Exception as e:
-        logger.error(f"Error sending leaderboard results: {e}")
 
 async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Command handler for /weeklytest"""
@@ -301,7 +270,7 @@ async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Start the sequence with the first question
         await update.message.reply_text("Starting weekly test...")
         
-        # Send announcement to discussion group
+        # Announce test start in discussion group
         await context.bot.send_message(
             chat_id=DISCUSSION_GROUP_ID,
             text="🎮 *WEEKLY TEST STARTING* 🎮\n\nAnswer the questions that will appear here to participate in the leaderboard!",
@@ -353,7 +322,7 @@ async def custom_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Start the sequence with the first question
         await update.message.reply_text("Starting custom test...")
         
-        # Send announcement to discussion group
+        # Announce test start in discussion group
         await context.bot.send_message(
             chat_id=DISCUSSION_GROUP_ID,
             text="🎮 *CUSTOM TEST STARTING* 🎮\n\nAnswer the questions that will appear here to participate in the leaderboard!",
@@ -367,6 +336,19 @@ async def custom_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"Error in custom test command: {e}")
         await update.message.reply_text(f"Failed to start custom test: {str(e)}")
 
+async def handle_channel_forward(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle forwarded messages from channel to group"""
+    try:
+        message = update.message
+        
+        # Check if this is a forwarded message from our channel
+        if message.forward_from_chat and message.forward_from_chat.id == CHANNEL_ID:
+            # Delete the forwarded message to avoid duplicates
+            await message.delete()
+            logger.info(f"Deleted forwarded channel message in discussion group")
+    except Exception as e:
+        logger.error(f"Error handling forwarded message: {e}")
+
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     
@@ -376,6 +358,9 @@ def main():
     
     # Add poll answer handler
     application.add_handler(PollAnswerHandler(handle_poll_answer))
+    
+    # Add handler to delete forwarded messages from channel
+    application.add_handler(MessageHandler(filters.FORWARDED, handle_channel_forward))
     
     # Register error handler
     application.add_error_handler(lambda update, context: 
