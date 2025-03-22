@@ -1,8 +1,8 @@
 import os
 import logging
 import asyncio
-from telegram import Update, Bot, Poll, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler, CallbackQueryHandler
+from telegram import Update, Bot, Poll
+from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0"))
-DISCUSSION_GROUP_ID = int(os.getenv("DISCUSSION_GROUP_ID", "0"))
+DISCUSSION_GROUP_ID = int(os.getenv("DISCUSSION_GROUP_ID", "0"))  # Add discussion group ID
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.getenv("PORT", "8443"))
 
@@ -25,7 +25,6 @@ class WeeklyTest:
         self.active = False
         self.poll_ids = {}  # question_index -> poll_id
         self.poll_messages = {}  # question_index -> poll_message_id (in discussion group)
-        self.channel_participants = set()  # Set of user_ids participating via channel
 
     def reset(self):
         self.questions = []
@@ -34,7 +33,6 @@ class WeeklyTest:
         self.active = False
         self.poll_ids = {}
         self.poll_messages = {}
-        self.channel_participants = set()
 
     def add_point(self, user_id, user_name):
         if user_id not in self.participants:
@@ -88,16 +86,7 @@ async def send_question(context, question_index):
     weekly_test.current_question_index = question_index
     
     try:
-        # Create channel participation button for anonymous channel users
-        keyboard = [
-            [InlineKeyboardButton(
-                f"📝 Click to track your answer!",
-                callback_data=f"answer_{question_index}"
-            )]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        # 1. Send question to channel (anonymous poll) with participation button
+        # 1. Send question to channel (anonymous poll)
         channel_message = await context.bot.send_poll(
             chat_id=CHANNEL_ID,
             question=f"❓ Question {question_index + 1}: {question['question']}",
@@ -107,13 +96,6 @@ async def send_question(context, question_index):
             correct_option_id=question["correct_option"],
             explanation=f"The correct answer is: {question['options'][question['correct_option']]}",
             open_period=15  # Close after 15 seconds
-        )
-        
-        # Send a follow-up message with the button to track answers
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=f"🔔 Click the button below to track your answer for Question {question_index + 1}",
-            reply_markup=reply_markup
         )
         
         # 2. Send the same poll to discussion group (non-anonymous)
@@ -170,27 +152,11 @@ async def stop_poll_and_check_answers(context, question_index):
             message_id=weekly_test.poll_messages[question_index]
         )
         
-        # Send correct answer message to discussion group
+        # Send correct answer message
         await context.bot.send_message(
             chat_id=DISCUSSION_GROUP_ID,
             text=f"✅ Correct answer: *{question['options'][correct_option]}*",
             parse_mode="Markdown"
-        )
-        
-        # Send correct answer announcement to channel with answer tracking reminder
-        keyboard = [
-            [InlineKeyboardButton(
-                "📝 Track my answer",
-                callback_data=f"answer_{question_index}"
-            )]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=f"✅ Correct answer for Question {question_index + 1}: *{question['options'][correct_option]}*\n\nIf you haven't already, click below to track your answer for the leaderboard!",
-            parse_mode="Markdown",
-            reply_markup=reply_markup
         )
         
         logger.info(f"Poll for question {question_index + 1} stopped")
@@ -242,99 +208,6 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 logger.info(f"User {user_name} answered question {question_index + 1} correctly")
     except Exception as e:
         logger.error(f"Error handling poll answer: {e}")
-
-async def handle_answer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle callback queries from channel participants to track their answers"""
-    global weekly_test
-    
-    try:
-        query = update.callback_query
-        user_id = query.from_user.id
-        user_name = query.from_user.full_name if hasattr(query.from_user, 'full_name') else f"User {user_id}"
-        
-        # Extract question index from callback data
-        data = query.data
-        if not data.startswith("answer_"):
-            await query.answer("Invalid callback data")
-            return
-        
-        question_index = int(data.split("_")[1])
-        
-        if not weekly_test.active:
-            await query.answer("This quiz is no longer active")
-            return
-        
-        # Add user to channel participants set
-        weekly_test.channel_participants.add(user_id)
-        
-        # Create a private message with answer options
-        keyboard = []
-        options = weekly_test.questions[question_index]["options"]
-        for i, option in enumerate(options):
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"{chr(65 + i)}. {option}", 
-                    callback_data=f"select_{question_index}_{i}"
-                )
-            ])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        # Send a private message to the user with answer options
-        await query.message.reply_text(
-            f"📋 Select your answer for Question {question_index + 1}:",
-            reply_markup=reply_markup
-        )
-        
-        await query.answer("Choose your answer from the options")
-        
-    except Exception as e:
-        logger.error(f"Error handling answer callback: {e}")
-        await query.answer("An error occurred")
-
-async def handle_answer_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the user's answer selection from the private chat"""
-    global weekly_test
-    
-    try:
-        query = update.callback_query
-        user_id = query.from_user.id
-        user_name = query.from_user.full_name if hasattr(query.from_user, 'full_name') else f"User {user_id}"
-        
-        # Extract data from callback
-        data = query.data
-        parts = data.split("_")
-        if len(parts) != 3 or parts[0] != "select":
-            await query.answer("Invalid selection")
-            return
-        
-        question_index = int(parts[1])
-        selected_option = int(parts[2])
-        
-        if not weekly_test.active:
-            await query.answer("This quiz is no longer active")
-            return
-        
-        # Check if the answer is correct
-        correct_option = weekly_test.questions[question_index]["correct_option"]
-        
-        if selected_option == correct_option:
-            weekly_test.add_point(user_id, user_name)
-            await query.answer("✅ Correct! Your answer has been recorded.")
-            await query.edit_message_text(
-                f"✅ Your answer for Question {question_index + 1} was correct and has been recorded!"
-            )
-            logger.info(f"Channel user {user_name} ({user_id}) answered question {question_index + 1} correctly")
-        else:
-            await query.answer("❌ Incorrect answer. Better luck next time!")
-            await query.edit_message_text(
-                f"❌ Your answer for Question {question_index + 1} was incorrect."
-            )
-            logger.info(f"Channel user {user_name} ({user_id}) answered question {question_index + 1} incorrectly")
-    
-    except Exception as e:
-        logger.error(f"Error handling answer selection: {e}")
-        await query.answer("An error occurred")
 
 async def send_leaderboard_results(context):
     """Send the leaderboard results in a visually appealing format"""
@@ -388,22 +261,10 @@ async def send_leaderboard_results(context):
     else:
         message += "No participants this week."
     
-    # Add participation stats
-    channel_only_count = len(weekly_test.channel_participants - set(weekly_test.participants.keys()))
-    message += f"\n📊 *Participation Stats:*\n"
-    message += f"• Total participants: {len(weekly_test.participants)}\n"
-    message += f"• Channel participants: {len(weekly_test.channel_participants)}\n"
-    
     try:
-        # Send results to both channel and discussion group
+        # Send results to channel only
         await context.bot.send_message(
             chat_id=CHANNEL_ID,
-            text=message,
-            parse_mode="Markdown"
-        )
-        
-        await context.bot.send_message(
-            chat_id=DISCUSSION_GROUP_ID,
             text=message,
             parse_mode="Markdown"
         )
@@ -440,22 +301,10 @@ async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Start the sequence with the first question
         await update.message.reply_text("Starting weekly test...")
         
-        # Send announcement to both channel and discussion group
-        announcement = "🎮 *WEEKLY TEST STARTING* 🎮\n\n"
-        
-        # Channel announcement with instructions for channel-only users
-        channel_announcement = announcement + "📱 *Channel users:* Click the 'Track my answer' button after each question to participate in the leaderboard!"
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=channel_announcement,
-            parse_mode="Markdown"
-        )
-        
-        # Discussion group announcement
-        group_announcement = announcement + "Answer the questions that will appear here to participate in the leaderboard!"
+        # Send announcement to discussion group
         await context.bot.send_message(
             chat_id=DISCUSSION_GROUP_ID,
-            text=group_announcement,
+            text="🎮 *WEEKLY TEST STARTING* 🎮\n\nAnswer the questions that will appear here to participate in the leaderboard!",
             parse_mode="Markdown"
         )
         
@@ -504,22 +353,10 @@ async def custom_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Start the sequence with the first question
         await update.message.reply_text("Starting custom test...")
         
-        # Send announcement to both channel and discussion group
-        announcement = "🎮 *CUSTOM TEST STARTING* 🎮\n\n"
-        
-        # Channel announcement with instructions for channel-only users
-        channel_announcement = announcement + "📱 *Channel users:* Click the 'Track my answer' button after each question to participate in the leaderboard!"
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=channel_announcement,
-            parse_mode="Markdown"
-        )
-        
-        # Discussion group announcement
-        group_announcement = announcement + "Answer the questions that will appear here to participate in the leaderboard!"
+        # Send announcement to discussion group
         await context.bot.send_message(
             chat_id=DISCUSSION_GROUP_ID,
-            text=group_announcement,
+            text="🎮 *CUSTOM TEST STARTING* 🎮\n\nAnswer the questions that will appear here to participate in the leaderboard!",
             parse_mode="Markdown"
         )
         
@@ -537,12 +374,8 @@ def main():
     application.add_handler(CommandHandler("weeklytest", weekly_test_command))
     application.add_handler(CommandHandler("customtest", custom_test_command))
     
-    # Add poll answer handler for discussion group
+    # Add poll answer handler
     application.add_handler(PollAnswerHandler(handle_poll_answer))
-    
-    # Add callback handlers for channel participants
-    application.add_handler(CallbackQueryHandler(handle_answer_callback, pattern="^answer_"))
-    application.add_handler(CallbackQueryHandler(handle_answer_selection, pattern="^select_"))
     
     # Register error handler
     application.add_error_handler(lambda update, context: 
