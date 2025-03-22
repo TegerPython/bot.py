@@ -693,4 +693,4 @@ def main():
 
     # Error handler
     application.add_error_handler(lambda update, context: 
-                               logger.error(f"Error: {context.error}", exc_info=context.
+                               logger.error(f"Error: {context.error}"), exc_info=context.
