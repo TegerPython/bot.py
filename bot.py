@@ -19,8 +19,8 @@ OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0"))
 DISCUSSION_GROUP_ID = int(os.getenv("DISCUSSION_GROUP_ID", "0"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.getenv("PORT", "8443"))
-WEEKLY_LEADERBOARD_JSON_URL = os.getenv("WEEKLY_LEADERBOARD_JSON_URL")
-WEEKLY_QUESTIONS_JSON_URL = os.getenv("WEEKLY_QUESTIONS_JSON_URL")
+WEEKLY_QUESTIONS_JSON_URL = "https://raw.githubusercontent.com/TegerPython/bot_data/main/weekly_questions.json"
+WEEKLY_LEADERBOARD_JSON_URL = "https://raw.githubusercontent.com/TegerPython/bot_data/main/weekly_leaderboard.json"
 
 # Constants
 QUESTION_DURATION = 30  # seconds
