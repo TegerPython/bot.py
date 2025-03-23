@@ -73,9 +73,15 @@ async def fetch_questions_from_url():
         async with aiohttp.ClientSession() as session:
             async with session.get(WEEKLY_QUESTIONS_JSON_URL) as response:
                 if response.status == 200:
-                    data = await response.json()
-                    logger.info(f"Fetched {len(data)} questions from external source")
-                    return data
+                    # Get raw text first, then parse as JSON
+                    text_content = await response.text()
+                    try:
+                        data = json.loads(text_content)
+                        logger.info(f"Fetched {len(data)} questions from external source")
+                        return data
+                    except json.JSONDecodeError as je:
+                        logger.error(f"JSON parsing error: {je}, content: {text_content[:100]}...")
+                        return []
                 else:
                     logger.error(f"Failed to fetch questions: HTTP {response.status}")
                     return []
