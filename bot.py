@@ -27,6 +27,9 @@ QUESTION_DURATION = 5  # seconds (changed from 30 to 5 for testing)
 NEXT_QUESTION_DELAY = 10  # seconds (changed from 35 to 10 for testing)
 MAX_QUESTIONS = 3  # New constant to limit number of questions for testing
 
+# Leaderboard library to store points
+leaderboard_library = {}
+
 # Test data structure
 class WeeklyTest:
     def __init__(self):
@@ -132,7 +135,9 @@ async def delete_forwarded_channel_message(context, message_text_pattern):
     """Delete forwarded channel message from group that matches the pattern"""
     try:
         # Get the most recent messages from the group
-        messages = await context.bot.get_chat_history(DISCUSSION_GROUP_ID, limit=10)
+        messages = []
+        async for message in context.bot.get_chat(DISCUSSION_GROUP_ID).get_messages(limit=10):
+            messages.append(message)
         
         for message in messages:
             # Check if message is forwarded from channel and matches pattern
@@ -141,8 +146,8 @@ async def delete_forwarded_channel_message(context, message_text_pattern):
                 message_text_pattern in message.text):
                 
                 # Delete the message
-                await context.bot.delete_message(DISCUSSION_GROUP_ID, message.message_id)
-                logger.info(f"Deleted forwarded channel message: {message.message_id}")
+                await context.bot.delete_message(DISCUSSION_GROUP_ID, message.id)
+                logger.info(f"Deleted forwarded channel message: {message.id}")
                 break
     except Exception as e:
         logger.error(f"Error deleting forwarded channel message: {e}")
@@ -273,7 +278,8 @@ async def stop_poll_and_check_answers(context, question_index):
             
         logger.info(f"Poll for question {question_index + 1} stopped")
     except Exception as e:
-        logger.error(f"Error stopping poll for question {question_index + 1}: {e}")
+        if "Poll has already been closed" not in str(e):
+            logger.error(f"Error stopping poll for question {question_index + 1}: {e}")
 
 async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle poll answers from discussion group members"""
@@ -315,7 +321,7 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def send_leaderboard_results(context):
     """Send the leaderboard results in a visually appealing format"""
-    global weekly_test
+    global weekly_test, leaderboard_library
     
     if not weekly_test.active:
         return
@@ -340,6 +346,12 @@ async def send_leaderboard_results(context):
     else:
         message += "No participants this week."
     
+    # Update leaderboard library
+    for user_id, data in results:
+        if user_id not in leaderboard_library:
+            leaderboard_library[user_id] = {"name": data["name"], "score": 0}
+        leaderboard_library[user_id]["score"] += data["score"]
+    
     # Try to save leaderboard to external URL if configured
     if WEEKLY_LEADERBOARD_JSON_URL:
         try:
@@ -359,15 +371,9 @@ async def send_leaderboard_results(context):
             logger.error(f"Error saving leaderboard to external URL: {e}")
     
     try:
-        # Send results to both channel and discussion group
+        # Send results to channel only
         await context.bot.send_message(
             chat_id=CHANNEL_ID,
-            text=message,
-            parse_mode="Markdown"
-        )
-        
-        await context.bot.send_message(
-            chat_id=DISCUSSION_GROUP_ID,
             text=message,
             parse_mode="Markdown"
         )
