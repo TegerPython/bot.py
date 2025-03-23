@@ -3,8 +3,10 @@ import logging
 import asyncio
 import json
 import aiohttp
+import pytz
+from datetime import datetime, timedelta
 from telegram import Update, Bot, Poll, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler, CallbackQueryHandler, filters
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -19,6 +21,10 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.getenv("PORT", "8443"))
 WEEKLY_LEADERBOARD_JSON_URL = os.getenv("WEEKLY_LEADERBOARD_JSON_URL")
 WEEKLY_QUESTIONS_JSON_URL = os.getenv("WEEKLY_QUESTIONS_JSON_URL")
+
+# Constants
+QUESTION_DURATION = 30  # seconds
+NEXT_QUESTION_DELAY = 35  # seconds
 
 # Test data structure
 class WeeklyTest:
@@ -58,31 +64,12 @@ class WeeklyTest:
 # Global test instance
 weekly_test = WeeklyTest()
 
-# Sample test questions
-sample_questions = [
-    {
-        "question": "What is the capital of France?",
-        "options": ["Paris", "London", "Berlin", "Madrid"],
-        "correct_option": 0
-    },
-    {
-        "question": "Which planet is closest to the sun?",
-        "options": ["Mercury", "Venus", "Earth", "Mars"],
-        "correct_option": 0
-    },
-    {
-        "question": "What is 2+2?",
-        "options": ["3", "4", "5", "6"],
-        "correct_option": 1
-    }
-]
-
 async def fetch_questions_from_url():
     """Fetch questions from external JSON URL"""
     try:
         if not WEEKLY_QUESTIONS_JSON_URL:
-            logger.warning("WEEKLY_QUESTIONS_JSON_URL not set, using sample questions")
-            return sample_questions
+            logger.error("WEEKLY_QUESTIONS_JSON_URL not set")
+            return []
             
         async with aiohttp.ClientSession() as session:
             async with session.get(WEEKLY_QUESTIONS_JSON_URL) as response:
@@ -92,19 +79,17 @@ async def fetch_questions_from_url():
                     return data
                 else:
                     logger.error(f"Failed to fetch questions: HTTP {response.status}")
-                    return sample_questions
+                    return []
     except Exception as e:
         logger.error(f"Error fetching questions: {e}")
-        return sample_questions
+        return []
 
 async def send_channel_announcement(context):
     """Send announcement to channel with button to join discussion group"""
     try:
         # Create inline keyboard with button to join discussion group
-        # First, get the discussion group invite link
         chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
         if not chat.invite_link:
-            # Create an invite link if one doesn't exist
             invite_link = await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)
             group_link = invite_link.invite_link
         else:
@@ -167,10 +152,10 @@ async def send_question(context, question_index):
         # Send announcement to discussion group for the question
         await context.bot.send_message(
             chat_id=DISCUSSION_GROUP_ID,
-            text=f"⚠️ Answer Question {question_index + 1} in the poll above. You have 15 seconds! Answers will be tracked for the leaderboard."
+            text=f"⚠️ Answer Question {question_index + 1} in the poll above. You have {QUESTION_DURATION} seconds! Answers will be tracked for the leaderboard."
         )
         
-        # Notify channel that a question is live in the group - ONLY NOTIFY, NO ANSWERS
+        # Notify channel that a question is live in the group
         chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
         if not chat.invite_link:
             invite_link = await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)
@@ -187,24 +172,23 @@ async def send_question(context, question_index):
             chat_id=CHANNEL_ID,
             text=f"🚨 *QUESTION {question_index + 1} IS LIVE!* 🚨\n\n"
                  f"Join the discussion group to answer and earn points!\n"
-                 f"⏱️ Only 15 seconds to answer!",
+                 f"⏱️ Only {QUESTION_DURATION} seconds to answer!",
             parse_mode="Markdown",
             reply_markup=reply_markup
         )
         
         logger.info(f"Question {question_index + 1} sent to discussion group")
-        logger.info(f"Poll ID for question {question_index + 1}: {group_message.poll.id}")
         
         # Schedule next question after delay
         context.job_queue.run_once(
             lambda ctx: asyncio.create_task(send_question(ctx, question_index + 1)),
-            20  # Send next question after 20 seconds
+            NEXT_QUESTION_DELAY
         )
         
         # Schedule poll closure
         context.job_queue.run_once(
             lambda ctx: asyncio.create_task(stop_poll_and_check_answers(ctx, question_index)),
-            15  # Close poll after 15 seconds
+            QUESTION_DURATION
         )
     except Exception as e:
         logger.error(f"Error sending question {question_index + 1}: {e}")
@@ -233,8 +217,6 @@ async def stop_poll_and_check_answers(context, question_index):
             parse_mode="Markdown"
         )
         
-        # No longer sending answers to channel - removed that code
-        
         logger.info(f"Poll for question {question_index + 1} stopped")
     except Exception as e:
         logger.error(f"Error stopping poll for question {question_index + 1}: {e}")
@@ -247,12 +229,7 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         poll_answer = update.poll_answer
         poll_id = poll_answer.poll_id
         
-        # Debug logging
-        logger.info(f"Received poll answer for poll ID: {poll_id}")
-        logger.info(f"Current active poll IDs: {weekly_test.poll_ids}")
-        
         if not weekly_test.active:
-            logger.info("Weekly test not active, ignoring poll answer")
             return
         
         # Find which question this poll belongs to
@@ -263,7 +240,6 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 break
         
         if question_index is None:
-            logger.warning(f"Poll ID {poll_id} not found in tracked polls")
             return
         
         # Get user information
@@ -272,14 +248,10 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         user_name = user.full_name if hasattr(user, 'full_name') else (
             user.username if hasattr(user, 'username') else f"User {user_id}")
         
-        logger.info(f"Processing answer from user {user_name} (ID: {user_id})")
-        
         # Check if the user answered correctly
         if len(poll_answer.option_ids) > 0:  # Ensure user selected an option
             selected_option = poll_answer.option_ids[0]
             correct_option = weekly_test.questions[question_index]["correct_option"]
-            
-            logger.info(f"User selected option {selected_option}, correct is {correct_option}")
             
             if selected_option == correct_option:
                 weekly_test.add_point(user_id, user_name)
@@ -372,7 +344,10 @@ async def schedule_test_command(update: Update, context: ContextTypes.DEFAULT_TY
         
         # Fetch questions from external URL
         questions = await fetch_questions_from_url()
-        
+        if not questions:
+            await update.message.reply_text("❌ No questions found. Please check WEEKLY_QUESTIONS_JSON_URL.")
+            return
+            
         # Reset and prepare the test
         weekly_test.reset()
         weekly_test.questions = questions
@@ -429,8 +404,12 @@ async def start_test(context):
         logger.error(f"Error starting scheduled test: {e}")
 
 async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Command handler for /weeklytest to start immediately"""
+    """Command handler for /weeklytest to start immediately - only works in private chat"""
     global weekly_test
+    
+    # Check if command was sent in a group - if so, ignore it
+    if update.effective_chat.type != "private":
+        return
     
     user_id = update.effective_user.id
     
@@ -447,7 +426,10 @@ async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         # Fetch questions from external URL
         questions = await fetch_questions_from_url()
-        
+        if not questions:
+            await update.message.reply_text("❌ No questions found. Please check WEEKLY_QUESTIONS_JSON_URL.")
+            return
+            
         # Reset and prepare the test
         weekly_test.reset()
         weekly_test.questions = questions
@@ -477,64 +459,67 @@ async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"Error in weekly test command: {e}")
         await update.message.reply_text(f"Failed to start weekly test: {str(e)}")
 
-async def custom_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Command handler for /customtest with specific questions"""
-    global weekly_test
-    
-    user_id = update.effective_user.id
-    
-    if user_id != OWNER_ID:
-        await update.message.reply_text("❌ Not authorized")
-        return
-    
+async def schedule_weekly_test(context):
+    """Schedule the weekly test for Friday at 6pm Gaza time"""
     try:
-        # Custom quiz questions (example)
-        custom_questions = [
-            {
-                "question": "What is the largest planet in our solar system?",
-                "options": ["Saturn", "Jupiter", "Neptune", "Uranus"],
-                "correct_option": 1
-            },
-            {
-                "question": "Which element has the chemical symbol 'Au'?",
-                "options": ["Silver", "Aluminum", "Gold", "Copper"],
-                "correct_option": 2
-            },
-            {
-                "question": "Who wrote 'Romeo and Juliet'?",
-                "options": ["Charles Dickens", "William Shakespeare", "Jane Austen", "Mark Twain"],
-                "correct_option": 1
-            }
-        ]
+        # Get current date and time in Gaza time zone
+        gaza_tz = pytz.timezone('Asia/Gaza')
+        now = datetime.now(gaza_tz)
         
+        # Calculate next Friday at 6pm
+        days_until_friday = (4 - now.weekday()) % 7  # 4 = Friday (0 is Monday)
+        if days_until_friday == 0 and now.hour >= 18:
+            days_until_friday = 7  # If it's Friday after 6pm, schedule for next Friday
+            
+        next_friday = now + timedelta(days=days_until_friday)
+        next_friday = next_friday.replace(hour=18, minute=0, second=0, microsecond=0)
+        
+        # Calculate seconds until next Friday at 6pm
+        seconds_until_friday = (next_friday - now).total_seconds()
+        
+        logger.info(f"Scheduling next weekly test for {next_friday.strftime('%Y-%m-%d %H:%M:%S')} Gaza time")
+        
+        # Schedule the test
+        context.job_queue.run_once(
+            lambda ctx: asyncio.create_task(auto_schedule_test(ctx)),
+            seconds_until_friday
+        )
+    except Exception as e:
+        logger.error(f"Error scheduling weekly test: {e}")
+
+async def auto_schedule_test(context):
+    """Automatically start the scheduled weekly test"""
+    try:
+        # Fetch questions from external URL
+        questions = await fetch_questions_from_url()
+        if not questions:
+            logger.error("No questions found for auto-scheduled test")
+            # Reschedule for next week
+            await schedule_weekly_test(context)
+            return
+            
         # Reset and prepare the test
         weekly_test.reset()
-        weekly_test.questions = custom_questions
-        weekly_test.active = True
+        weekly_test.questions = questions
+        weekly_test.scheduled = True
         
-        # Start the sequence with the first question
-        await update.message.reply_text("Starting custom test...")
+        # Send channel announcement
+        await send_channel_announcement(context)
         
-        # Send announcement to channel
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text="🎮 *CUSTOM TEST STARTING NOW* 🎮\n\nJoin the discussion group to participate!",
-            parse_mode="Markdown"
+        # Schedule the actual test to start in 5 minutes
+        context.job_queue.run_once(
+            lambda ctx: asyncio.create_task(start_test(ctx)), 
+            300  # 5 minutes = 300 seconds
         )
         
-        # Send announcement to discussion group
-        await context.bot.send_message(
-            chat_id=DISCUSSION_GROUP_ID,
-            text="🎮 *CUSTOM TEST STARTING NOW* 🎮\n\nGet ready for the first question!",
-            parse_mode="Markdown"
-        )
+        logger.info("Auto-scheduled test will start in 5 minutes")
         
-        # Send first question
-        await send_question(context, 0)
-    
+        # Schedule next week's test
+        await schedule_weekly_test(context)
     except Exception as e:
-        logger.error(f"Error in custom test command: {e}")
-        await update.message.reply_text(f"Failed to start custom test: {str(e)}")
+        logger.error(f"Error in auto schedule test: {e}")
+        # Retry scheduling next week
+        await schedule_weekly_test(context)
 
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle button clicks"""
@@ -542,21 +527,21 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     
     # Always answer callback query to remove loading state
     await query.answer()
-    
-    try:
-        # Handle different button actions based on data
-        # Currently no specific action needed as we're using url buttons
-        pass
-    except Exception as e:
-        logger.error(f"Error handling button callback: {e}")
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Basic start command"""
+    await update.message.reply_text(
+        "👋 Welcome to the Weekly Test Bot! I organize weekly quizzes in our channel.\n\n"
+        "Every Friday at 6PM Gaza time, a new quiz will be available."
+    )
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Add command handlers
-    application.add_handler(CommandHandler("weeklytest", weekly_test_command))
-    application.add_handler(CommandHandler("customtest", custom_test_command))
-    application.add_handler(CommandHandler("scheduletest", schedule_test_command))
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("weeklytest", weekly_test_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("scheduletest", schedule_test_command, filters=filters.ChatType.PRIVATE))
     
     # Add poll answer handler
     application.add_handler(PollAnswerHandler(handle_poll_answer))
@@ -567,6 +552,12 @@ def main():
     # Register error handler
     application.add_error_handler(lambda update, context: 
                                  logger.error(f"Error: {context.error}", exc_info=context.error))
+    
+    # Schedule initial weekly test
+    application.job_queue.run_once(
+        lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
+        1  # Schedule immediately after startup
+    )
     
     # Start the bot
     if WEBHOOK_URL:
