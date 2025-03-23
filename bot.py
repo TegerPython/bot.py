@@ -190,12 +190,6 @@ async def send_question(context, question_index):
         weekly_test.poll_ids[question_index] = group_message.poll.id
         weekly_test.poll_messages[question_index] = group_message.message_id
         
-        # Send announcement to discussion group for the question
-        await context.bot.send_message(
-            chat_id=DISCUSSION_GROUP_ID,
-            text=f"⚠️ Answer Question {question_index + 1} in the poll above. You have {QUESTION_DURATION} seconds! Answers will be tracked for the leaderboard."
-        )
-        
         # Notify channel that a question is live in the group
         chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
         if not chat.invite_link:
