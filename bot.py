@@ -21,9 +21,11 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.getenv("PORT", "8443"))
 WEEKLY_LEADERBOARD_JSON_URL = os.getenv("WEEKLY_LEADERBOARD_JSON_URL")
 WEEKLY_QUESTIONS_JSON_URL = os.getenv("WEEKLY_QUESTIONS_JSON_URL")
-# Constants
-QUESTION_DURATION = 30  # seconds
-NEXT_QUESTION_DELAY = 35  # seconds
+
+# Constants - MODIFIED FOR TESTING
+QUESTION_DURATION = 5  # seconds (changed from 30 to 5 for testing)
+NEXT_QUESTION_DELAY = 10  # seconds (changed from 35 to 10 for testing)
+MAX_QUESTIONS = 3  # New constant to limit number of questions for testing
 
 # Test data structure
 class WeeklyTest:
@@ -36,6 +38,7 @@ class WeeklyTest:
         self.poll_messages = {}  # question_index -> poll_message_id
         self.scheduled = False
         self.scheduled_time = None
+        self.channel_messages_to_delete = []  # Store message IDs to delete
 
     def reset(self):
         self.questions = []
@@ -46,6 +49,7 @@ class WeeklyTest:
         self.poll_messages = {}
         self.scheduled = False
         self.scheduled_time = None
+        self.channel_messages_to_delete = []
 
     def add_point(self, user_id, user_name):
         if user_id not in self.participants:
@@ -78,7 +82,8 @@ async def fetch_questions_from_url():
                     try:
                         data = json.loads(text_content)
                         logger.info(f"Fetched {len(data)} questions from external source")
-                        return data
+                        # Limit questions to MAX_QUESTIONS for testing
+                        return data[:MAX_QUESTIONS]
                     except json.JSONDecodeError as je:
                         logger.error(f"JSON parsing error: {je}, content: {text_content[:100]}...")
                         return []
@@ -123,6 +128,25 @@ async def send_channel_announcement(context):
     except Exception as e:
         logger.error(f"Error sending channel announcement: {e}")
 
+async def delete_forwarded_channel_message(context, message_text_pattern):
+    """Delete forwarded channel message from group that matches the pattern"""
+    try:
+        # Get the most recent messages from the group
+        messages = await context.bot.get_chat_history(DISCUSSION_GROUP_ID, limit=10)
+        
+        for message in messages:
+            # Check if message is forwarded from channel and matches pattern
+            if (message.forward_from_chat and 
+                message.forward_from_chat.id == CHANNEL_ID and
+                message_text_pattern in message.text):
+                
+                # Delete the message
+                await context.bot.delete_message(DISCUSSION_GROUP_ID, message.message_id)
+                logger.info(f"Deleted forwarded channel message: {message.message_id}")
+                break
+    except Exception as e:
+        logger.error(f"Error deleting forwarded channel message: {e}")
+
 async def send_question(context, question_index):
     """Send questions to discussion group only"""
     global weekly_test
@@ -140,6 +164,12 @@ async def send_question(context, question_index):
     weekly_test.current_question_index = question_index
     
     try:
+        # Set chat permissions to restrict member messaging during quiz
+        await context.bot.set_chat_permissions(
+            DISCUSSION_GROUP_ID,
+            permissions={"can_send_messages": False}
+        )
+        
         # Send question to discussion group (non-anonymous)
         group_message = await context.bot.send_poll(
             chat_id=DISCUSSION_GROUP_ID,
@@ -147,7 +177,8 @@ async def send_question(context, question_index):
             options=question["options"],
             is_anonymous=False,  # Non-anonymous to track users
             protect_content=True,  # Prevent forwarding
-            allows_multiple_answers=False
+            allows_multiple_answers=False,
+            open_period=QUESTION_DURATION  # Set timer for poll to auto-close
         )
         
         # Store the poll information
@@ -168,29 +199,37 @@ async def send_question(context, question_index):
         else:
             group_link = chat.invite_link
             
-        keyboard = [
-            [InlineKeyboardButton("📝 Answer Now!", url=group_link)]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await context.bot.send_message(
+        # For channel only, don't include join button for users already in the group
+        channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text=f"🚨 *QUESTION {question_index + 1} IS LIVE!* 🚨\n\n"
                  f"Join the discussion group to answer and earn points!\n"
-                 f"⏱️ Only {QUESTION_DURATION} seconds to answer!",
-            parse_mode="Markdown",
-            reply_markup=reply_markup
+                 f"⏱️ Only {QUESTION_DURATION} seconds to answer!"
+        )
+        
+        # Schedule deletion of the forwarded channel message from the group
+        context.job_queue.run_once(
+            lambda ctx: asyncio.create_task(delete_forwarded_channel_message(
+                ctx, f"QUESTION {question_index + 1} IS LIVE")),
+            2  # Wait 2 seconds to ensure message is forwarded before deletion
         )
         
         logger.info(f"Question {question_index + 1} sent to discussion group")
         
-        # Schedule next question after delay
-        context.job_queue.run_once(
-            lambda ctx: asyncio.create_task(send_question(ctx, question_index + 1)),
-            NEXT_QUESTION_DELAY
-        )
+        # Schedule next question after delay or end if we've reached MAX_QUESTIONS
+        if question_index + 1 < min(len(weekly_test.questions), MAX_QUESTIONS):
+            context.job_queue.run_once(
+                lambda ctx: asyncio.create_task(send_question(ctx, question_index + 1)),
+                NEXT_QUESTION_DELAY
+            )
+        else:
+            # If this was the last question, schedule leaderboard
+            context.job_queue.run_once(
+                lambda ctx: asyncio.create_task(send_leaderboard_results(ctx)),
+                QUESTION_DURATION + 5  # Wait a bit after last question closes
+            )
         
-        # Schedule poll closure
+        # Schedule poll closure and restoring chat permissions
         context.job_queue.run_once(
             lambda ctx: asyncio.create_task(stop_poll_and_check_answers(ctx, question_index)),
             QUESTION_DURATION
@@ -209,7 +248,7 @@ async def stop_poll_and_check_answers(context, question_index):
     correct_option = question["correct_option"]
     
     try:
-        # Stop the poll
+        # Poll should auto-close due to open_period, but we'll stop it explicitly too
         poll = await context.bot.stop_poll(
             chat_id=DISCUSSION_GROUP_ID,
             message_id=weekly_test.poll_messages[question_index]
@@ -222,6 +261,13 @@ async def stop_poll_and_check_answers(context, question_index):
             parse_mode="Markdown"
         )
         
+        # Restore chat permissions if this is the last question
+        if question_index + 1 >= min(len(weekly_test.questions), MAX_QUESTIONS):
+            await context.bot.set_chat_permissions(
+                DISCUSSION_GROUP_ID,
+                permissions={"can_send_messages": True}
+            )
+            
         logger.info(f"Poll for question {question_index + 1} stopped")
     except Exception as e:
         logger.error(f"Error stopping poll for question {question_index + 1}: {e}")
@@ -321,6 +367,12 @@ async def send_leaderboard_results(context):
             chat_id=DISCUSSION_GROUP_ID,
             text=message,
             parse_mode="Markdown"
+        )
+        
+        # Restore chat permissions if they weren't already
+        await context.bot.set_chat_permissions(
+            DISCUSSION_GROUP_ID,
+            permissions={"can_send_messages": True}
         )
         
         logger.info("Leaderboard results sent successfully")
