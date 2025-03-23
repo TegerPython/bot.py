@@ -151,12 +151,17 @@ async def send_question(context, question_index):
     """Send questions to discussion group only"""
     global weekly_test
     
+    if not weekly_test.active:
+        logger.info("Test was stopped. Cancelling remaining questions.")
+        return
+    
     if question_index >= len(weekly_test.questions):
         # All questions sent, schedule leaderboard post
         logger.info("All questions sent, scheduling leaderboard results")
         context.job_queue.run_once(
             lambda ctx: asyncio.create_task(send_leaderboard_results(ctx)),
-            60  # Wait 1 minute after the last question
+            60,  # Wait 1 minute after the last question
+            name="send_leaderboard"
         )
         return
     
@@ -211,7 +216,8 @@ async def send_question(context, question_index):
         context.job_queue.run_once(
             lambda ctx: asyncio.create_task(delete_forwarded_channel_message(
                 ctx, f"QUESTION {question_index + 1} IS LIVE")),
-            2  # Wait 2 seconds to ensure message is forwarded before deletion
+            2,  # Wait 2 seconds to ensure message is forwarded before deletion
+            name="delete_forwarded_message"
         )
         
         logger.info(f"Question {question_index + 1} sent to discussion group")
@@ -220,19 +226,22 @@ async def send_question(context, question_index):
         if question_index + 1 < min(len(weekly_test.questions), MAX_QUESTIONS):
             context.job_queue.run_once(
                 lambda ctx: asyncio.create_task(send_question(ctx, question_index + 1)),
-                NEXT_QUESTION_DELAY
+                NEXT_QUESTION_DELAY,
+                name="next_question"
             )
         else:
             # If this was the last question, schedule leaderboard
             context.job_queue.run_once(
                 lambda ctx: asyncio.create_task(send_leaderboard_results(ctx)),
-                QUESTION_DURATION + 5  # Wait a bit after last question closes
+                QUESTION_DURATION + 5,  # Wait a bit after last question closes
+                name="send_leaderboard"
             )
         
         # Schedule poll closure and restoring chat permissions
         context.job_queue.run_once(
             lambda ctx: asyncio.create_task(stop_poll_and_check_answers(ctx, question_index)),
-            QUESTION_DURATION
+            QUESTION_DURATION,
+            name=f"stop_poll_{question_index}"
         )
     except Exception as e:
         logger.error(f"Error sending question {question_index + 1}: {e}")
@@ -382,6 +391,53 @@ async def send_leaderboard_results(context):
     except Exception as e:
         logger.error(f"Error sending leaderboard results: {e}")
 
+async def stop_weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command handler for /stopweekly to stop an ongoing test"""
+    global weekly_test
+    
+    # Only allow from owner in private chat
+    if update.effective_chat.type != "private" or update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ Not authorized")
+        return
+    
+    if not weekly_test.active:
+        await update.message.reply_text("No active test to stop.")
+        return
+    
+    try:
+        # Set flag to stop the test
+        weekly_test.active = False
+        
+        # Restore chat permissions
+        await context.bot.set_chat_permissions(
+            DISCUSSION_GROUP_ID,
+            permissions={"can_send_messages": True}
+        )
+        
+        # Cancel any pending jobs
+        for job in context.job_queue.get_jobs_by_name("next_question"):
+            job.schedule_removal()
+            
+        for job in context.job_queue.get_jobs_by_name("send_leaderboard"):
+            job.schedule_removal()
+            
+        for i in range(len(weekly_test.questions)):
+            for job in context.job_queue.get_jobs_by_name(f"stop_poll_{i}"):
+                job.schedule_removal()
+        
+        # Send notifications
+        await context.bot.send_message(
+            chat_id=DISCUSSION_GROUP_ID,
+            text="⚠️ Weekly test has been stopped by the admin."
+        )
+        
+        await update.message.reply_text("✅ Weekly test stopped successfully.")
+        
+        logger.info("Weekly test stopped by admin command")
+    except Exception as e:
+        logger.error(f"Error stopping weekly test: {e}")
+        await update.message.reply_text(f"Failed to stop test: {str(e)}")
+
 async def schedule_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Command handler for /scheduletest to schedule a test in 5 minutes"""
     global weekly_test
@@ -419,7 +475,8 @@ async def schedule_test_command(update: Update, context: ContextTypes.DEFAULT_TY
         # Schedule the actual test to start in 5 minutes
         context.job_queue.run_once(
             lambda ctx: asyncio.create_task(start_test(ctx)), 
-            300  # 5 minutes = 300 seconds
+            300,  # 5 minutes = 300 seconds
+            name="start_test"
         )
         
         logger.info("Test scheduled to start in 5 minutes")
@@ -539,7 +596,8 @@ async def schedule_weekly_test(context):
         # Schedule the test
         context.job_queue.run_once(
             lambda ctx: asyncio.create_task(auto_schedule_test(ctx)),
-            seconds_until_friday
+            seconds_until_friday,
+            name="auto_schedule_test"
         )
     except Exception as e:
         logger.error(f"Error scheduling weekly test: {e}")
@@ -566,7 +624,8 @@ async def auto_schedule_test(context):
         # Schedule the actual test to start in 5 minutes
         context.job_queue.run_once(
             lambda ctx: asyncio.create_task(start_test(ctx)), 
-            300  # 5 minutes = 300 seconds
+            300,  # 5 minutes = 300 seconds
+            name="start_test"
         )
         
         logger.info("Auto-scheduled test will start in 5 minutes")
@@ -599,6 +658,7 @@ def main():
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("weeklytest", weekly_test_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("scheduletest", schedule_test_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("stopweekly", stop_weekly_test_command, filters=filters.ChatType.PRIVATE))
     
     # Add poll answer handler
     application.add_handler(PollAnswerHandler(handle_poll_answer))
@@ -613,7 +673,8 @@ def main():
     # Schedule initial weekly test
     application.job_queue.run_once(
         lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
-        1  # Schedule immediately after startup
+        1,  # Schedule immediately after startup
+        name="schedule_weekly_test"
     )
     
     # Start the bot
