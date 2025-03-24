@@ -605,6 +605,26 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         except Exception as e:
             logger.error(f"Error updating leaderboard: {e}")
 
+async def filter_forwarded_channel_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Filter and delete any messages forwarded from the channel to the group"""
+    try:
+        message = update.message
+        
+        # Check if message is in discussion group and forwarded from our channel
+        if (message and 
+            message.chat_id == DISCUSSION_GROUP_ID and
+            message.forward_from_chat and 
+            message.forward_from_chat.id == CHANNEL_ID and
+            ("Question" in message.text or "Test" in message.text)):
+            
+            try:
+                await message.delete()
+                logger.info(f"Auto-deleted forwarded channel message: {message.message_id}")
+            except Exception as e:
+                logger.error(f"Failed to auto-delete forwarded message: {e}")
+    except Exception as e:
+        logger.error(f"Error in forwarded message filter: {e}")
+
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     
@@ -617,6 +637,7 @@ def main():
     # Other handlers
     application.add_handler(PollAnswerHandler(handle_poll_answer))
     application.add_handler(CallbackQueryHandler(button_callback_handler))
+    
     # Add forwarded message filter
 from telegram.ext import MessageHandler, filters
 application.add_handler(MessageHandler(
