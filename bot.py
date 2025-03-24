@@ -639,13 +639,12 @@ def main():
     application.add_handler(CallbackQueryHandler(button_callback_handler))
     
     # Add forwarded message filter
-from telegram.ext import MessageHandler, filters
-application.add_handler(MessageHandler(
-    filters.FORWARDED & filters.ChatType.GROUPS, 
-    filter_forwarded_channel_messages
-))
+    application.add_handler(MessageHandler(
+        filters.FORWARDED & filters.ChatType.GROUPS, 
+        filter_forwarded_channel_messages
+    ))
     
-    # Error handler
+    # Error handler - check indentation here
     application.add_error_handler(lambda update, context: logger.error(f"Error: {context.error}", exc_info=True))
     
     # Initial scheduling
