@@ -173,25 +173,20 @@ async def send_question(context, question_index):
         weekly_test.poll_ids[question_index] = group_message.poll.id
         weekly_test.poll_messages[question_index] = group_message.message_id
         
-        # Send to channel with button
+        # Send to channel with button but disable forwarding
         channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text=f"📢 *Question {question_index + 1} is live!*\n"
                  f"⏱️ {question_duration} seconds to answer\n"
                  f"👉 Join the discussion group to participate!",
             parse_mode="Markdown",
+            disable_notification=False,
+            protect_content=True,  # This prevents forwarding
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
             ])
         )
         weekly_test.channel_message_ids.append(channel_message.message_id)
-        
-        # Schedule deletion of forwarded message after a short delay
-        context.job_queue.run_once(
-            lambda ctx: asyncio.create_task(delete_forwarded_messages(ctx, f"Question {question_index + 1} is live")),
-            2,  # 2 second delay to ensure message is forwarded
-            name=f"delete_forwarded_{question_index}"
-        )
         
         # Schedule next question or leaderboard
         if question_index + 1 < min(len(weekly_test.questions), MAX_QUESTIONS):
