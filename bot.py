@@ -5,7 +5,7 @@ import json
 import aiohttp
 import pytz
 from datetime import datetime, timedelta
-from telegram import Update, Bot, Poll, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler, CallbackQueryHandler, filters
 
 # Logging setup
@@ -45,16 +45,8 @@ def get_question_duration(question_index):
 
 class WeeklyTest:
     def __init__(self):
-        self.questions = []
-        self.current_question_index = 0
-        self.participants = {}
-        self.active = False
-        self.poll_ids = {}
-        self.poll_messages = {}
-        self.scheduled = False
-        self.scheduled_time = None
-        self.channel_messages_to_delete = []
-
+        self.reset()
+        
     def reset(self):
         self.questions = []
         self.current_question_index = 0
@@ -64,7 +56,8 @@ class WeeklyTest:
         self.poll_messages = {}
         self.scheduled = False
         self.scheduled_time = None
-        self.channel_messages_to_delete = []
+        self.channel_message_ids = []  # Store channel message IDs for deletion
+        self.group_link = None
 
     def add_point(self, user_id, user_name):
         if user_id not in self.participants:
@@ -80,29 +73,20 @@ class WeeklyTest:
 
 weekly_test = WeeklyTest()
 
-async def delete_forwarded_channel_message(context, message_text_pattern):
-    """Delete forwarded channel message from group"""
+async def delete_channel_messages(context):
+    """Delete all channel messages from this test"""
     try:
-        # Get recent messages through direct API call
-        async with aiohttp.ClientSession() as session:
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
-            async with session.get(url) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    for update in data.get('result', []):
-                        if (update.get('message', {}).get('chat', {}).get('id') == DISCUSSION_GROUP_ID and
-                           update.get('message', {}).get('forward_from_chat', {}).get('id') == CHANNEL_ID and
-                           message_text_pattern in update.get('message', {}).get('text', '')):
-                            
-                            await context.bot.delete_message(
-                                chat_id=DISCUSSION_GROUP_ID,
-                                message_id=update['message']['message_id']
-                            )
-                            logger.info(f"Deleted message: {update['message']['message_id']}")
-                            return
-        logger.warning("Target message not found")
+        for msg_id in weekly_test.channel_message_ids:
+            try:
+                await context.bot.delete_message(
+                    chat_id=CHANNEL_ID,
+                    message_id=msg_id
+                )
+            except Exception as e:
+                logger.warning(f"Couldn't delete message {msg_id}: {e}")
+        weekly_test.channel_message_ids = []
     except Exception as e:
-        logger.error(f"Error deleting message: {e}")
+        logger.error(f"Error deleting channel messages: {e}")
 
 async def fetch_questions_from_url():
     """Fetch questions from external JSON URL"""
@@ -114,43 +98,18 @@ async def fetch_questions_from_url():
         async with aiohttp.ClientSession() as session:
             async with session.get(WEEKLY_QUESTIONS_JSON_URL) as response:
                 if response.status == 200:
-                    # First get the raw text content
                     text_content = await response.text()
                     try:
-                        # Then parse as JSON regardless of content-type
                         data = json.loads(text_content)
-                        logger.info(f"Fetched {len(data)} questions from external source")
+                        logger.info(f"Fetched {len(data)} questions")
                         return data[:MAX_QUESTIONS]
                     except json.JSONDecodeError as je:
-                        logger.error(f"JSON parsing error: {je}, content: {text_content[:200]}...")
+                        logger.error(f"JSON error: {je}, content: {text_content[:200]}...")
                         return []
-                else:
-                    logger.error(f"Failed to fetch questions: HTTP {response.status}")
-                    return []
+                logger.error(f"Failed to fetch: HTTP {response.status}")
     except Exception as e:
         logger.error(f"Error fetching questions: {e}")
-        return []
-
-async def send_channel_announcement(context):
-    """Send announcement to channel with join button"""
-    try:
-        chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
-        group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
-        
-        keyboard = [
-            [InlineKeyboardButton("🏆 Join & Participate!", url=group_link)]
-        ]
-        
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text="📢 *WEEKLY TEST ANNOUNCEMENT* 📢\n\n"
-                 "A new weekly test starts in 5 minutes!\n"
-                 "Join our discussion group to participate!",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    except Exception as e:
-        logger.error(f"Error sending announcement: {e}")
+    return []
 
 async def send_question(context, question_index):
     """Send question to group and announcement to channel"""
@@ -158,10 +117,7 @@ async def send_question(context, question_index):
     
     if not weekly_test.active or question_index >= len(weekly_test.questions):
         if weekly_test.active:
-            context.job_queue.run_once(
-                lambda ctx: asyncio.create_task(send_leaderboard_results(ctx)),
-                60, name="send_leaderboard"
-            )
+            await send_leaderboard_results(context)
         return
 
     question = weekly_test.questions[question_index]
@@ -190,32 +146,18 @@ async def send_question(context, question_index):
         weekly_test.poll_ids[question_index] = group_message.poll.id
         weekly_test.poll_messages[question_index] = group_message.message_id
         
-        # Get group link
-        chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
-        group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
-        
-        # Send to channel with buttons
-        keyboard = [
-            [InlineKeyboardButton("📢 Join Discussion", url=group_link)],
-            [InlineKeyboardButton("🏆 View Leaderboard", callback_data="view_leaderboard")]
-        ]
-        
-        await context.bot.send_message(
+        # Send to channel with button
+        channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
-            text=f"🚨 *QUESTION {question_index + 1} IS LIVE!* 🚨\n\n"
-                 f"⏱️ {question_duration} seconds to answer!\n"
-                 f"Join the group to participate!",
+            text=f"📢 *Question {question_index + 1} is live!*\n"
+                 f"⏱️ {question_duration} seconds to answer\n"
+                 f"👉 Join the discussion group to participate!",
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
+            ])
         )
-        
-        # Schedule message deletion
-        context.job_queue.run_once(
-            lambda ctx: asyncio.create_task(
-                delete_forwarded_channel_message(ctx, f"QUESTION {question_index + 1} IS LIVE")
-            ),
-            2, name="delete_forwarded_message"
-        )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
         
         # Schedule next question or leaderboard
         if question_index + 1 < min(len(weekly_test.questions), MAX_QUESTIONS):
@@ -255,9 +197,7 @@ async def stop_poll_and_check_answers(context, question_index):
         
         await context.bot.send_message(
             chat_id=DISCUSSION_GROUP_ID,
-            text=f"✅ *CORRECT ANSWER* ✅\n\n"
-                 f"Question {question_index + 1}: {question['question']}\n"
-                 f"Correct: *{question['options'][question['correct_option']]}*",
+            text=f"✅ *Correct Answer:* {question['options'][question['correct_option']]}",
             parse_mode="Markdown"
         )
         
@@ -282,7 +222,6 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         poll_answer = update.poll_answer
         poll_id = poll_answer.poll_id
         
-        # Find which question this poll belongs to
         question_index = next(
             (idx for idx, p_id in weekly_test.poll_ids.items() if p_id == poll_id),
             None
@@ -290,7 +229,6 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if question_index is None:
             return
             
-        # Check if answer is correct
         if poll_answer.option_ids and poll_answer.option_ids[0] == weekly_test.questions[question_index]["correct_option"]:
             user = poll_answer.user
             user_name = user.full_name or user.username or f"User {user.id}"
@@ -309,15 +247,15 @@ async def send_leaderboard_results(context):
     results = weekly_test.get_results()
     
     # Format leaderboard message
-    message = "🏆 *WEEKLY TEST RESULTS* 🏆\n\n"
+    message = "🏆 *Final Results* 🏆\n\n"
     if results:
         for i, (user_id, data) in enumerate(results, start=1):
             if i == 1:
-                message += f"🥇 *{data['name']}* 🥇 - {data['score']} pts\n"
+                message += f"🥇 *{data['name']}* - {data['score']} pts\n"
             elif i == 2:
-                message += f"🥈 *{data['name']}* 🥈 - {data['score']} pts\n"
+                message += f"🥈 *{data['name']}* - {data['score']} pts\n"
             elif i == 3:
-                message += f"🥉 *{data['name']}* 🥉 - {data['score']} pts\n"
+                message += f"🥉 *{data['name']}* - {data['score']} pts\n"
             else:
                 message += f"{i}. {data['name']} - {data['score']} pts\n"
     else:
@@ -332,16 +270,20 @@ async def send_leaderboard_results(context):
     # Save to external URL if configured
     if WEEKLY_LEADERBOARD_JSON_URL:
         try:
-            leaderboard_data = [
-                {"rank": i, "name": data["name"], "score": data["score"]}
-                for i, (user_id, data) in enumerate(results, start=1)
-            ]
+            leaderboard_data = {
+                "timestamp": datetime.now().isoformat(),
+                "results": [
+                    {"rank": i, "name": data["name"], "score": data["score"]}
+                    for i, (user_id, data) in enumerate(results, start=1)
+                ]
+            }
             
             async with aiohttp.ClientSession() as session:
-                headers = {'Content-Type': 'application/json'}
-                if API_AUTH_TOKEN:
-                    headers['Authorization'] = f'Bearer {API_AUTH_TOKEN}'
-                    
+                headers = {
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {API_AUTH_TOKEN}'
+                }
+                
                 async with session.post(
                     WEEKLY_LEADERBOARD_JSON_URL,
                     json=leaderboard_data,
@@ -349,16 +291,26 @@ async def send_leaderboard_results(context):
                 ) as response:
                     if response.status != 200:
                         error_text = await response.text()
-                        logger.error(f"Leaderboard save failed: HTTP {response.status} - {error_text}")
+                        logger.error(f"Leaderboard save failed: HTTP {response.status}")
+                        if response.status == 403:
+                            logger.error("Check your API authentication token")
         except Exception as e:
             logger.error(f"Error saving leaderboard: {e}")
     
     try:
-        await context.bot.send_message(
+        # Delete previous channel messages
+        await delete_channel_messages(context)
+        
+        # Send final results
+        channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text=message,
-            parse_mode="Markdown"
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
+            ])
         )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
         
         await context.bot.set_chat_permissions(
             DISCUSSION_GROUP_ID,
@@ -369,40 +321,7 @@ async def send_leaderboard_results(context):
     except Exception as e:
         logger.error(f"Error sending leaderboard: {e}")
 
-async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle button clicks from channel messages"""
-    query = update.callback_query
-    
-    try:
-        if query.data == "view_leaderboard":
-            results = weekly_test.get_results()
-            
-            message = "🏆 *CURRENT LEADERBOARD* 🏆\n\n"
-            if results:
-                for i, (user_id, data) in enumerate(results[:10], start=1):
-                    message += f"{i}. {data['name']} - {data['score']} pts\n"
-            else:
-                message += "No scores yet!"
-            
-            await query.answer()
-            await query.edit_message_text(
-                text=message,
-                parse_mode="Markdown"
-            )
-        else:
-            await query.answer()
-    except Exception as e:
-        logger.error(f"Error handling button: {e}")
-        await query.answer("⚠️ An error occurred", show_alert=True)
-
-# Command handlers remain the same as before
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Welcome to the Weekly Test Bot!\n\n"
-        "Tests run every Friday at 6PM Gaza time."
-    )
-
-async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start test immediately (owner only)"""
     if update.effective_chat.type != "private" or update.effective_user.id != OWNER_ID:
         return
@@ -417,21 +336,23 @@ async def weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         weekly_test.questions = questions
         weekly_test.active = True
         
-        await update.message.reply_text("🚀 Starting weekly test...")
+        # Get group invite link
+        chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
+        weekly_test.group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
         
-        # Send announcements
-        await context.bot.send_message(
+        # Send initial message to channel
+        channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
-            text="🎮 *WEEKLY TEST STARTING NOW* 🎮\n\nJoin the discussion group!",
-            parse_mode="Markdown"
+            text="📢 *Weekly Test Starting Now!*\n"
+                 "Questions will appear in the discussion group shortly...",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
+            ])
         )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
         
-        await context.bot.send_message(
-            chat_id=DISCUSSION_GROUP_ID,
-            text="🎮 *WEEKLY TEST STARTING NOW* 🎮\n\nGet ready!",
-            parse_mode="Markdown"
-        )
-        
+        await update.message.reply_text("🚀 Starting weekly test...")
         await send_question(context, 0)
         
     except Exception as e:
@@ -453,8 +374,24 @@ async def schedule_test_command(update: Update, context: ContextTypes.DEFAULT_TY
         weekly_test.questions = questions
         weekly_test.scheduled = True
         
+        # Get group invite link
+        chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
+        weekly_test.group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
+        
+        # Send announcement to channel
+        channel_message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text="📢 *Weekly Test Announcement*\n\n"
+                 "A new test will begin in 5 minutes!\n"
+                 "Join the discussion group to participate.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
+            ])
+        )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
+        
         await update.message.reply_text("⏱ Test scheduled to start in 5 minutes")
-        await send_channel_announcement(context)
         
         context.job_queue.run_once(
             lambda ctx: asyncio.create_task(start_test(ctx)),
@@ -464,7 +401,31 @@ async def schedule_test_command(update: Update, context: ContextTypes.DEFAULT_TY
         logger.error(f"Error scheduling test: {e}")
         await update.message.reply_text(f"❌ Failed to schedule: {str(e)}")
 
-async def stop_weekly_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start_test(context):
+    """Start scheduled test"""
+    global weekly_test
+    
+    if not weekly_test.scheduled:
+        return
+        
+    weekly_test.active = True
+    weekly_test.scheduled = False
+    
+    # Send starting message to channel
+    channel_message = await context.bot.send_message(
+        chat_id=CHANNEL_ID,
+        text="📢 *Test Starting Now!*\n"
+             "Questions will appear in the discussion group shortly...",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
+        ])
+    )
+    weekly_test.channel_message_ids.append(channel_message.message_id)
+    
+    await send_question(context, 0)
+
+async def stop_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Stop ongoing test (owner only)"""
     if update.effective_chat.type != "private" or update.effective_user.id != OWNER_ID:
         return
@@ -487,6 +448,9 @@ async def stop_weekly_test_command(update: Update, context: ContextTypes.DEFAULT
             permissions={"can_send_messages": True}
         )
         
+        # Delete channel messages
+        await delete_channel_messages(context)
+        
         await context.bot.send_message(
             chat_id=DISCUSSION_GROUP_ID,
             text="⚠️ Test stopped by admin"
@@ -496,30 +460,6 @@ async def stop_weekly_test_command(update: Update, context: ContextTypes.DEFAULT
     except Exception as e:
         logger.error(f"Error stopping test: {e}")
         await update.message.reply_text(f"❌ Failed to stop: {str(e)}")
-
-async def start_test(context):
-    """Start scheduled test"""
-    global weekly_test
-    
-    if not weekly_test.scheduled:
-        return
-        
-    weekly_test.active = True
-    weekly_test.scheduled = False
-    
-    await context.bot.send_message(
-        chat_id=CHANNEL_ID,
-        text="🎮 *WEEKLY TEST STARTING NOW* 🎮\n\nJoin the discussion group!",
-        parse_mode="Markdown"
-    )
-    
-    await context.bot.send_message(
-        chat_id=DISCUSSION_GROUP_ID,
-        text="🎮 *WEEKLY TEST STARTING NOW* 🎮\n\nGet ready!",
-        parse_mode="Markdown"
-    )
-    
-    await send_question(context, 0)
 
 async def schedule_weekly_test(context):
     """Schedule weekly test for Friday 6PM Gaza time"""
@@ -558,38 +498,87 @@ async def auto_schedule_test(context):
         weekly_test.questions = questions
         weekly_test.scheduled = True
         
-        await send_channel_announcement(context)
+        # Get fresh group invite link
+        try:
+            chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
+            weekly_test.group_link = chat.invite_link or (
+                await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)
+            ).invite_link
+        except Exception as e:
+            logger.error(f"Error getting group link: {e}")
+            weekly_test.group_link = "https://t.me/example"  # Fallback URL
+
+        # Send channel announcement
+        channel_message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text="📢 *Automated Weekly Test Announcement*\n\n"
+                 "A new test will begin in 5 minutes!\n"
+                 "Join the discussion group to participate.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
+            ])
+        )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
         
+        # Schedule test start
         context.job_queue.run_once(
             lambda ctx: asyncio.create_task(start_test(ctx)),
-            300, name="start_test"
+            300,  # 5 minutes = 300 seconds
+            name="start_test"
         )
         
+        # Schedule next weekly test
         await schedule_weekly_test(context)
+        
     except Exception as e:
         logger.error(f"Error in auto schedule: {e}")
         await schedule_weekly_test(context)
+
+# Add the remaining handlers and main function
+async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle button clicks from channel messages"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "view_leaderboard":
+        results = weekly_test.get_results()
+        message = "🏆 Current Leaderboard 🏆\n\n"
+        if results:
+            for i, (_, data) in enumerate(results[:10], 1):
+                message += f"{i}. {data['name']} - {data['score']} pts\n"
+        else:
+            message += "No scores yet!"
+        
+        try:
+            await query.edit_message_text(
+                text=message,
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.error(f"Error updating leaderboard: {e}")
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Command handlers
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("weeklytest", weekly_test_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("start", start_test_command))
+    application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("scheduletest", schedule_test_command, filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("stopweekly", stop_weekly_test_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("stopweekly", stop_test_command, filters=filters.ChatType.PRIVATE))
     
     # Other handlers
     application.add_handler(PollAnswerHandler(handle_poll_answer))
     application.add_handler(CallbackQueryHandler(button_callback_handler))
     
     # Error handler
-    application.add_error_handler(lambda update, context: logger.error(f"Error: {context.error}", exc_info=context.error))
+    application.add_error_handler(lambda update, context: logger.error(f"Error: {context.error}", exc_info=True))
     
     # Initial scheduling
     application.job_queue.run_once(
         lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
-        1, name="initial_schedule"
+        5,  # Initial delay to let the bot start
+        name="initial_schedule"
     )
     
     # Start bot
@@ -598,7 +587,8 @@ def main():
             listen="0.0.0.0",
             port=PORT,
             url_path=BOT_TOKEN,
-            webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}"
+            webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+            drop_pending_updates=True
         )
     else:
         application.run_polling(drop_pending_updates=True)
