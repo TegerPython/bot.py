@@ -73,28 +73,29 @@ weekly_test = WeeklyTest()
 async def delete_forwarded_messages(context, message_text_pattern):
     """Delete forwarded channel messages from group with a small delay"""
     try:
-        # Wait 1 second to ensure message has been forwarded
-        await asyncio.sleep(1)
+        # Wait a bit longer to ensure message has been forwarded
+        await asyncio.sleep(3)
         
-        # Use direct API call to get recent messages
-        async with aiohttp.ClientSession() as session:
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?limit=10"
-            async with session.get(url) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    for update in data.get('result', []):
-                        msg = update.get('message', {})
-                        if (msg.get('chat', {}).get('id') == DISCUSSION_GROUP_ID and
-                            msg.get('forward_from_chat', {}).get('id') == CHANNEL_ID and
-                            message_text_pattern in msg.get('text', '')):
-                            
-                            # Delete the message
-                            await context.bot.delete_message(
-                                chat_id=DISCUSSION_GROUP_ID,
-                                message_id=msg['message_id']
-                            )
-                            logger.info(f"Deleted forwarded message: {msg['message_id']}")
-                            return
+        # Get recent messages directly from the group
+        recent_messages = await context.bot.get_chat_history(
+            chat_id=DISCUSSION_GROUP_ID,
+            limit=10  # Get last 10 messages
+        )
+        
+        for msg in recent_messages:
+            # Check if this is a forwarded message from our channel
+            if (msg.forward_from_chat and
+                msg.forward_from_chat.id == CHANNEL_ID and
+                message_text_pattern in msg.text):
+                
+                # Delete the message
+                await context.bot.delete_message(
+                    chat_id=DISCUSSION_GROUP_ID,
+                    message_id=msg.message_id
+                )
+                logger.info(f"Deleted forwarded message: {msg.message_id}")
+                return
+                
         logger.warning("No forwarded message found to delete")
     except Exception as e:
         logger.error(f"Error deleting forwarded messages: {e}")
