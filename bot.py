@@ -31,6 +31,15 @@ QUESTION_DURATION = 10  # Default duration (seconds)
 NEXT_QUESTION_DELAY = 10  # seconds between questions
 MAX_QUESTIONS = 3  # Maximum number of questions per test
 
+def get_question_duration(question_index):
+    """Return duration in seconds for the given question index"""
+    if question_index == 0:  # Question 1
+        return 5  # 5 seconds for Question 1
+    elif question_index == 2:  # Question 3
+        return 15  # 15 seconds for Question 3
+    else:
+        return QUESTION_DURATION  # Default duration
+
 class WeeklyTest:
     def __init__(self):
         self.reset()
