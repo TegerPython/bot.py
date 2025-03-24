@@ -31,18 +31,6 @@ QUESTION_DURATION = 10  # Default duration (seconds)
 NEXT_QUESTION_DELAY = 10  # seconds between questions
 MAX_QUESTIONS = 3  # Maximum number of questions per test
 
-# Leaderboard storage
-leaderboard_library = {}
-
-def get_question_duration(question_index):
-    """Return duration in seconds for the given question index"""
-    if question_index == 0:  # Question 1
-        return 5  # 5 seconds for Question 1
-    elif question_index == 2:  # Question 3
-        return 15  # 15 seconds for Question 3
-    else:
-        return QUESTION_DURATION  # Default duration
-
 class WeeklyTest:
     def __init__(self):
         self.reset()
@@ -56,8 +44,9 @@ class WeeklyTest:
         self.poll_messages = {}
         self.scheduled = False
         self.scheduled_time = None
-        self.channel_message_ids = []  # Store channel message IDs for deletion
         self.group_link = None
+        self.channel_message_ids = []
+        self.forwarded_messages_to_delete = []  # Store forwarded message IDs from group
 
     def add_point(self, user_id, user_name):
         if user_id not in self.participants:
@@ -73,6 +62,21 @@ class WeeklyTest:
 
 weekly_test = WeeklyTest()
 
+async def delete_forwarded_messages(context):
+    """Delete all forwarded messages from channel in group"""
+    try:
+        for msg_id in weekly_test.forwarded_messages_to_delete:
+            try:
+                await context.bot.delete_message(
+                    chat_id=DISCUSSION_GROUP_ID,
+                    message_id=msg_id
+                )
+            except Exception as e:
+                logger.warning(f"Couldn't delete forwarded message {msg_id}: {e}")
+        weekly_test.forwarded_messages_to_delete = []
+    except Exception as e:
+        logger.error(f"Error deleting forwarded messages: {e}")
+
 async def delete_channel_messages(context):
     """Delete all channel messages from this test"""
     try:
@@ -83,7 +87,7 @@ async def delete_channel_messages(context):
                     message_id=msg_id
                 )
             except Exception as e:
-                logger.warning(f"Couldn't delete message {msg_id}: {e}")
+                logger.warning(f"Couldn't delete channel message {msg_id}: {e}")
         weekly_test.channel_message_ids = []
     except Exception as e:
         logger.error(f"Error deleting channel messages: {e}")
@@ -158,6 +162,12 @@ async def send_question(context, question_index):
             ])
         )
         weekly_test.channel_message_ids.append(channel_message.message_id)
+        
+        # Schedule deletion of forwarded message in group
+        context.job_queue.run_once(
+            lambda ctx: asyncio.create_task(delete_forwarded_messages(ctx)),
+            2, name="delete_forwarded_messages"
+        )
         
         # Schedule next question or leaderboard
         if question_index + 1 < min(len(weekly_test.questions), MAX_QUESTIONS):
@@ -239,7 +249,7 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def send_leaderboard_results(context):
     """Send final leaderboard results"""
-    global weekly_test, leaderboard_library
+    global weekly_test
     
     if not weekly_test.active:
         return
@@ -261,21 +271,15 @@ async def send_leaderboard_results(context):
     else:
         message += "No participants this week."
     
-    # Update leaderboard library
-    for user_id, data in results:
-        if user_id not in leaderboard_library:
-            leaderboard_library[user_id] = {"name": data["name"], "score": 0}
-        leaderboard_library[user_id]["score"] += data["score"]
-    
     # Save to external URL if configured
-    if WEEKLY_LEADERBOARD_JSON_URL:
+    if WEEKLY_LEADERBOARD_JSON_URL and API_AUTH_TOKEN:
         try:
             leaderboard_data = {
-                "timestamp": datetime.now().isoformat(),
                 "results": [
-                    {"rank": i, "name": data["name"], "score": data["score"]}
-                    for i, (user_id, data) in enumerate(results, start=1)
-                ]
+                    {"user_id": str(user_id), "name": data["name"], "score": data["score"]}
+                    for user_id, data in results
+                ],
+                "timestamp": datetime.now().isoformat()
             }
             
             async with aiohttp.ClientSession() as session:
@@ -291,9 +295,7 @@ async def send_leaderboard_results(context):
                 ) as response:
                     if response.status != 200:
                         error_text = await response.text()
-                        logger.error(f"Leaderboard save failed: HTTP {response.status}")
-                        if response.status == 403:
-                            logger.error("Check your API authentication token")
+                        logger.error(f"Leaderboard save failed: HTTP {response.status} - {error_text}")
         except Exception as e:
             logger.error(f"Error saving leaderboard: {e}")
     
@@ -535,7 +537,6 @@ async def auto_schedule_test(context):
         logger.error(f"Error in auto schedule: {e}")
         await schedule_weekly_test(context)
 
-# Add the remaining handlers and main function
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle button clicks from channel messages"""
     query = update.callback_query
