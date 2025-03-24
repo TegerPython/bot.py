@@ -134,12 +134,15 @@ async def send_channel_announcement(context):
 async def delete_forwarded_channel_message(context, message_text_pattern):
     """Delete forwarded channel message from group that matches the pattern"""
     try:
-        # Get the most recent messages from the group
-        messages = await context.bot.get_chat(DISCUSSION_GROUP_ID).get_messages(limit=10)
+        # Get recent messages from the group
+        messages = await context.bot.get_chat_history(
+            chat_id=DISCUSSION_GROUP_ID,
+            limit=10
+        )
         
-        async for message in messages:
+        for message in messages:
             # Check if message is forwarded from channel and matches pattern
-            if (message.forward_from_chat and
+            if (message.forward_from_chat and 
                 message.forward_from_chat.id == CHANNEL_ID and
                 message_text_pattern in message.text):
                 
@@ -150,7 +153,34 @@ async def delete_forwarded_channel_message(context, message_text_pattern):
     except Exception as e:
         logger.error(f"Error deleting forwarded channel message: {e}")
 
+def get_question_duration(question_index):
+    """Return the appropriate duration in seconds for the given question index"""
+    if question_index == 0:  # Question 1
+        return 5  # 5 seconds for Question 1
+    elif question_index == 2:  # Question 3
+        return 15  # 15 seconds for Question 3
+    else:
+        return QUESTION_DURATION  # Default duration for other questions
+
 async def send_question(context, question_index):
+    # Get custom duration for this question
+question_duration = get_question_duration(question_index)
+
+# Then replace QUESTION_DURATION with question_duration in these locations:
+group_message = await context.bot.send_poll(
+    # ... other parameters
+    open_period=question_duration  # Set timer for poll to auto-close
+)
+
+# When sending channel message for non-Question 3:
+time_to_answer = f"{question_duration} seconds"
+
+# For scheduling poll closure
+context.job_queue.run_once(
+    lambda ctx: asyncio.create_task(stop_poll_and_check_answers(ctx, question_index)),
+    question_duration,
+    name=f"stop_poll_{question_index}"
+)
     """Send questions to discussion group only"""
     global weekly_test
     
@@ -200,14 +230,33 @@ async def send_question(context, question_index):
             group_link = invite_link.invite_link
         else:
             group_link = chat.invite_link
+        
+        # Check if this is Question 3 to add a button
+        if question_index + 1 == 3:  # Question 3
+            # For Question 3, include a button to join discussion group
+            keyboard = [
+                [InlineKeyboardButton("Join Discussion Group", url=group_link)]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
             
-        # For channel only, don't include join button for users already in the group
-        channel_message = await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=f"🚨 *QUESTION {question_index + 1} IS LIVE!* 🚨\n\n"
-                 f"Join the discussion group to answer and earn points!\n"
-                 f"⏱️ Only {QUESTION_DURATION} seconds to answer!"
-        )
+            channel_message = await context.bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=f"🚨 *QUESTION {question_index + 1} IS LIVE!* 🚨\n\n"
+                     f"Join the discussion group to answer and earn points!\n"
+                     f"⏱️ Only 15 seconds to answer!",
+                parse_mode="Markdown",
+                reply_markup=reply_markup
+            )
+        else:
+            # For other questions, no button
+            time_to_answer = "5 seconds" if question_index + 1 == 1 else f"{QUESTION_DURATION} seconds"
+            
+            channel_message = await context.bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=f"🚨 *QUESTION {question_index + 1} IS LIVE!* 🚨\n\n"
+                     f"Join the discussion group to answer and earn points!\n"
+                     f"⏱️ Only {time_to_answer} to answer!"
+            )
         
         # Schedule deletion of the forwarded channel message from the group
         context.job_queue.run_once(
@@ -263,7 +312,9 @@ async def stop_poll_and_check_answers(context, question_index):
         # Send correct answer message to discussion group only
         await context.bot.send_message(
             chat_id=DISCUSSION_GROUP_ID,
-            text=f"✅ Correct answer: *{question['options'][correct_option]}*",
+            text=f"✅ *CORRECT ANSWER* ✅\n\n"
+                 f"Question {question_index + 1}: {question['question']}\n"
+                 f"Correct answer: *{question['options'][correct_option]}*",
             parse_mode="Markdown"
         )
         
@@ -278,7 +329,6 @@ async def stop_poll_and_check_answers(context, question_index):
     except Exception as e:
         if "Poll has already been closed" not in str(e):
             logger.error(f"Error stopping poll for question {question_index + 1}: {e}")
-
 async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle poll answers from discussion group members"""
     global weekly_test
@@ -360,7 +410,7 @@ async def send_leaderboard_results(context):
             
             async with aiohttp.ClientSession() as session:
                 async with session.post(WEEKLY_LEADERBOARD_JSON_URL, 
-                                            json=leaderboard_data) as response:
+                                        json=leaderboard_data) as response:
                     if response.status == 200:
                         logger.info("Saved leaderboard to external URL")
                     else:
@@ -666,7 +716,7 @@ def main():
     
     # Register error handler
     application.add_error_handler(lambda update, context: 
-                                    logger.error(f"Error: {context.error}", exc_info=context.error))
+                                 logger.error(f"Error: {context.error}", exc_info=context.error))
     
     # Schedule initial weekly test
     application.job_queue.run_once(
@@ -693,3 +743,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
