@@ -6,7 +6,7 @@ import aiohttp
 import pytz
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler, CallbackQueryHandler, filters
+from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler, CallbackQueryHandler, MessageHandler, filters
 
 # Logging setup
 logging.basicConfig(
@@ -568,6 +568,24 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             )
         except Exception as e:
             logger.error(f"Error updating leaderboard: {e}")
+async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Monitor for and delete forwarded channel messages in the group"""
+    if not update.message or update.message.chat_id != DISCUSSION_GROUP_ID:
+        return
+        
+    msg = update.message
+    
+    # Check if this is a forwarded message from our channel
+    if (msg.forward_from_chat and
+        msg.forward_from_chat.id == CHANNEL_ID and
+        "Question" in msg.text and
+        "is live" in msg.text):
+        
+        try:
+            await msg.delete()
+            logger.info(f"Deleted forwarded message with ID: {msg.message_id}")
+        except Exception as e:
+            logger.error(f"Failed to delete forwarded message: {e}")
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
@@ -577,6 +595,9 @@ def main():
     application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("scheduletest", schedule_test_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("stopweekly", stop_test_command, filters=filters.ChatType.PRIVATE))
+
+    # Add this handler for all messages - place it BEFORE the other handlers
+    application.add_handler(MessageHandler(filters.ALL, handle_all_messages))
     
     # Other handlers
     application.add_handler(PollAnswerHandler(handle_poll_answer))
