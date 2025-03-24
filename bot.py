@@ -182,7 +182,7 @@ async def send_question(context, question_index):
         weekly_test.channel_message_ids.append(channel_message.message_id)
         
         # Immediately delete any forwarded version of this message from the group
-        async def delete_forwarded_messages(context, message_text_pattern):
+    async def delete_forwarded_messages(context, message_text_pattern):
     """Delete forwarded channel messages from group with a small delay"""
     try:
         # Wait 1 second to ensure message has been forwarded
