@@ -114,12 +114,22 @@ async def fetch_questions_from_url():
         async with aiohttp.ClientSession() as session:
             async with session.get(WEEKLY_QUESTIONS_JSON_URL) as response:
                 if response.status == 200:
-                    data = await response.json()
-                    return data[:MAX_QUESTIONS]
-                logger.error(f"Failed to fetch questions: HTTP {response.status}")
+                    # First get the raw text content
+                    text_content = await response.text()
+                    try:
+                        # Then parse as JSON regardless of content-type
+                        data = json.loads(text_content)
+                        logger.info(f"Fetched {len(data)} questions from external source")
+                        return data[:MAX_QUESTIONS]
+                    except json.JSONDecodeError as je:
+                        logger.error(f"JSON parsing error: {je}, content: {text_content[:200]}...")
+                        return []
+                else:
+                    logger.error(f"Failed to fetch questions: HTTP {response.status}")
+                    return []
     except Exception as e:
         logger.error(f"Error fetching questions: {e}")
-    return []
+        return []
 
 async def send_channel_announcement(context):
     """Send announcement to channel with join button"""
