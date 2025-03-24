@@ -71,20 +71,33 @@ class WeeklyTest:
 
 weekly_test = WeeklyTest()
 
-async def delete_forwarded_messages(context):
-    """Delete all forwarded messages from channel in group"""
+async def delete_forwarded_messages(context, message_text_pattern):
+    """Delete forwarded channel messages from group that match the pattern"""
     try:
-        for msg_id in weekly_test.forwarded_messages_to_delete:
-            try:
-                await context.bot.delete_message(
-                    chat_id=DISCUSSION_GROUP_ID,
-                    message_id=msg_id
-                )
-            except Exception as e:
-                logger.warning(f"Couldn't delete forwarded message {msg_id}: {e}")
-        weekly_test.forwarded_messages_to_delete = []
+        # Get recent messages from the group
+        messages = []
+        async for message in context.bot.get_chat_history(
+            chat_id=DISCUSSION_GROUP_ID,
+            limit=5  # Only check the most recent few messages
+        ):
+            # Check if message is forwarded from channel and matches pattern
+            if (message.forward_from_chat and 
+                message.forward_from_chat.id == CHANNEL_ID and
+                message_text_pattern in message.text):
+                
+                try:
+                    # Delete the message immediately
+                    await context.bot.delete_message(
+                        chat_id=DISCUSSION_GROUP_ID,
+                        message_id=message.message_id
+                    )
+                    logger.info(f"Deleted forwarded message: {message.message_id}")
+                except Exception as e:
+                    logger.error(f"Failed to delete message {message.message_id}: {e}")
+                break  # Only delete the most recent matching message
+            
     except Exception as e:
-        logger.error(f"Error deleting forwarded messages: {e}")
+        logger.error(f"Error checking for forwarded messages: {e}")
 
 async def delete_channel_messages(context):
     """Delete all channel messages from this test"""
@@ -172,11 +185,8 @@ async def send_question(context, question_index):
         )
         weekly_test.channel_message_ids.append(channel_message.message_id)
         
-        # Schedule deletion of forwarded message in group
-        context.job_queue.run_once(
-            lambda ctx: asyncio.create_task(delete_forwarded_messages(ctx)),
-            2, name="delete_forwarded_messages"
-        )
+        # Immediately delete any forwarded version of this message from the group
+        await delete_forwarded_messages(context, f"Question {question_index + 1} is live")
         
         # Schedule next question or leaderboard
         if question_index + 1 < min(len(weekly_test.questions), MAX_QUESTIONS):
