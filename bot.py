@@ -6,7 +6,8 @@ import aiohttp
 import pytz
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler, CallbackQueryHandler, filters
+
 # Logging setup
 logging.basicConfig(
     level=logging.INFO,
@@ -70,67 +71,26 @@ class WeeklyTest:
 weekly_test = WeeklyTest()
 
 async def delete_forwarded_messages(context, message_text_pattern):
-    """Delete forwarded channel messages from group"""
+    """Delete forwarded channel messages from group immediately"""
     try:
-        # Try to delete using the bot's delete_message method directly
-        # Get recent messages from the discussion group
-        messages = await context.bot.get_updates(offset=-1, limit=10, timeout=1)
-        
-        for update in messages:
-            if (hasattr(update, 'message') and update.message and 
-                update.message.chat_id == DISCUSSION_GROUP_ID and
-                hasattr(update.message, 'forward_from_chat') and update.message.forward_from_chat and
-                update.message.forward_from_chat.id == CHANNEL_ID and
-                message_text_pattern in update.message.text):
-                
-                try:
-                    await context.bot.delete_message(
-                        chat_id=DISCUSSION_GROUP_ID,
-                        message_id=update.message.message_id
-                    )
-                    logger.info(f"Deleted forwarded message: {update.message.message_id}")
-                    return
-                except Exception as e:
-                    logger.error(f"Failed to delete message via bot method: {e}")
-        
-        # Fallback to direct API call
+        # Use direct API call to find forwarded messages
         async with aiohttp.ClientSession() as session:
-            # Get recent messages
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
-            params = {
-                "limit": 10,
-                "allowed_updates": ["message"]
-            }
-            
-            async with session.get(url, params=params) as response:
-                if response.status != 200:
-                    logger.error(f"Failed to get updates: {response.status}")
-                    return
-                
-                result = await response.json()
-                
-                for update in result.get('result', []):
-                    message = update.get('message', {})
-                    forward = message.get('forward_from_chat', {})
-                    
-                    if (message.get('chat', {}).get('id') == DISCUSSION_GROUP_ID and
-                        forward.get('id') == CHANNEL_ID and
-                        message_text_pattern in message.get('text', '')):
-                        
-                        # Delete the matching message
-                        delete_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
-                        delete_params = {
-                            "chat_id": DISCUSSION_GROUP_ID,
-                            "message_id": message['message_id']
-                        }
-                        
-                        async with session.post(delete_url, json=delete_params) as del_response:
-                            if del_response.status == 200:
-                                logger.info(f"Deleted forwarded message: {message['message_id']}")
-                            else:
-                                logger.error(f"Failed to delete message: {del_response.status}")
-                        return
-        
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?limit=10"
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    for update in data.get('result', []):
+                        msg = update.get('message', {})
+                        if (msg.get('chat', {}).get('id') == DISCUSSION_GROUP_ID and
+                            msg.get('forward_from_chat', {}).get('id') == CHANNEL_ID and
+                            message_text_pattern in msg.get('text', '')):
+                            
+                            await context.bot.delete_message(
+                                chat_id=DISCUSSION_GROUP_ID,
+                                message_id=msg['message_id']
+                            )
+                            logger.info(f"Deleted forwarded message: {msg['message_id']}")
+                            return
         logger.warning("No forwarded message found to delete")
     except Exception as e:
         logger.error(f"Error deleting forwarded messages: {e}")
@@ -222,7 +182,89 @@ async def send_question(context, question_index):
         weekly_test.channel_message_ids.append(channel_message.message_id)
         
         # Immediately delete any forwarded version of this message from the group
-        await delete_forwarded_messages(context, f"Question {question_index + 1} is live")
+        async def delete_forwarded_messages(context, message_text_pattern):
+    """Delete forwarded channel messages from group with a small delay"""
+    try:
+        # Wait 1 second to ensure message has been forwarded
+        await asyncio.sleep(1)
+        
+        # Use direct API call to get recent messages
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?limit=10"
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    for update in data.get('result', []):
+                        msg = update.get('message', {})
+                        if (msg.get('chat', {}).get('id') == DISCUSSION_GROUP_ID and
+                            msg.get('forward_from_chat', {}).get('id') == CHANNEL_ID and
+                            message_text_pattern in msg.get('text', '')):
+                            
+                            # Delete the message
+                            await context.bot.delete_message(
+                                chat_id=DISCUSSION_GROUP_ID,
+                                message_id=msg['message_id']
+                            )
+                            logger.info(f"Deleted forwarded message: {msg['message_id']}")
+                            return
+        logger.warning("No forwarded message found to delete")
+    except Exception as e:
+        logger.error(f"Error deleting forwarded messages: {e}")
+
+async def send_question(context, question_index):
+    """Send question to group and announcement to channel"""
+    global weekly_test
+    
+    if not weekly_test.active or question_index >= len(weekly_test.questions):
+        if weekly_test.active:
+            await send_leaderboard_results(context)
+        return
+
+    question = weekly_test.questions[question_index]
+    weekly_test.current_question_index = question_index
+    
+    try:
+        # Restrict messaging during quiz
+        await context.bot.set_chat_permissions(
+            DISCUSSION_GROUP_ID,
+            permissions={"can_send_messages": False}
+        )
+        
+        # Send poll to group
+        question_duration = get_question_duration(question_index)
+        group_message = await context.bot.send_poll(
+            chat_id=DISCUSSION_GROUP_ID,
+            question=f"❓ Question {question_index + 1}: {question['question']}",
+            options=question["options"],
+            is_anonymous=False,
+            protect_content=True,
+            allows_multiple_answers=False,
+            open_period=question_duration
+        )
+        
+        # Store poll info
+        weekly_test.poll_ids[question_index] = group_message.poll.id
+        weekly_test.poll_messages[question_index] = group_message.message_id
+        
+        # Send to channel with button
+        channel_message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=f"📢 *Question {question_index + 1} is live!*\n"
+                 f"⏱️ {question_duration} seconds to answer\n"
+                 f"👉 Join the discussion group to participate!",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
+            ])
+        )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
+        
+        # Schedule deletion of forwarded message after a short delay
+        context.job_queue.run_once(
+            lambda ctx: asyncio.create_task(delete_forwarded_messages(ctx, f"Question {question_index + 1} is live")),
+            2,  # 2 second delay to ensure message is forwarded
+            name=f"delete_forwarded_{question_index}"
+        )
         
         # Schedule next question or leaderboard
         if question_index + 1 < min(len(weekly_test.questions), MAX_QUESTIONS):
@@ -605,26 +647,6 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         except Exception as e:
             logger.error(f"Error updating leaderboard: {e}")
 
-async def filter_forwarded_channel_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Filter and delete any messages forwarded from the channel to the group"""
-    try:
-        message = update.message
-        
-        # Check if message is in discussion group and forwarded from our channel
-        if (message and 
-            message.chat_id == DISCUSSION_GROUP_ID and
-            message.forward_from_chat and 
-            message.forward_from_chat.id == CHANNEL_ID and
-            ("Question" in message.text or "Test" in message.text)):
-            
-            try:
-                await message.delete()
-                logger.info(f"Auto-deleted forwarded channel message: {message.message_id}")
-            except Exception as e:
-                logger.error(f"Failed to auto-delete forwarded message: {e}")
-    except Exception as e:
-        logger.error(f"Error in forwarded message filter: {e}")
-
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     
@@ -638,13 +660,7 @@ def main():
     application.add_handler(PollAnswerHandler(handle_poll_answer))
     application.add_handler(CallbackQueryHandler(button_callback_handler))
     
-    # Add forwarded message filter
-    application.add_handler(MessageHandler(
-        filters.FORWARDED & filters.ChatType.GROUPS, 
-        filter_forwarded_channel_messages
-    ))
-    
-    # Error handler - check indentation here
+    # Error handler
     application.add_error_handler(lambda update, context: logger.error(f"Error: {context.error}", exc_info=True))
     
     # Initial scheduling
