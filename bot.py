@@ -6,7 +6,7 @@ import aiohttp
 import pytz
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler, CallbackQueryHandler, filters
 
 # Logging setup
 logging.basicConfig(
@@ -73,29 +73,28 @@ weekly_test = WeeklyTest()
 async def delete_forwarded_messages(context, message_text_pattern):
     """Delete forwarded channel messages from group with a small delay"""
     try:
-        # Wait a bit longer to ensure message has been forwarded
-        await asyncio.sleep(3)
+        # Wait 1 second to ensure message has been forwarded
+        await asyncio.sleep(1)
         
-        # Get recent messages directly from the group
-        recent_messages = await context.bot.get_chat_history(
-            chat_id=DISCUSSION_GROUP_ID,
-            limit=10  # Get last 10 messages
-        )
-        
-        for msg in recent_messages:
-            # Check if this is a forwarded message from our channel
-            if (msg.forward_from_chat and
-                msg.forward_from_chat.id == CHANNEL_ID and
-                message_text_pattern in msg.text):
-                
-                # Delete the message
-                await context.bot.delete_message(
-                    chat_id=DISCUSSION_GROUP_ID,
-                    message_id=msg.message_id
-                )
-                logger.info(f"Deleted forwarded message: {msg.message_id}")
-                return
-                
+        # Use direct API call to get recent messages
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?limit=10"
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    for update in data.get('result', []):
+                        msg = update.get('message', {})
+                        if (msg.get('chat', {}).get('id') == DISCUSSION_GROUP_ID and
+                            msg.get('forward_from_chat', {}).get('id') == CHANNEL_ID and
+                            message_text_pattern in msg.get('text', '')):
+                            
+                            # Delete the message
+                            await context.bot.delete_message(
+                                chat_id=DISCUSSION_GROUP_ID,
+                                message_id=msg['message_id']
+                            )
+                            logger.info(f"Deleted forwarded message: {msg['message_id']}")
+                            return
         logger.warning("No forwarded message found to delete")
     except Exception as e:
         logger.error(f"Error deleting forwarded messages: {e}")
@@ -173,20 +172,25 @@ async def send_question(context, question_index):
         weekly_test.poll_ids[question_index] = group_message.poll.id
         weekly_test.poll_messages[question_index] = group_message.message_id
         
-        # Send to channel with button but disable forwarding
+        # Send to channel with button
         channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text=f"📢 *Question {question_index + 1} is live!*\n"
                  f"⏱️ {question_duration} seconds to answer\n"
                  f"👉 Join the discussion group to participate!",
             parse_mode="Markdown",
-            disable_notification=False,
-            protect_content=True,  # This prevents forwarding
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
             ])
         )
         weekly_test.channel_message_ids.append(channel_message.message_id)
+        
+        # Schedule deletion of forwarded message after a short delay
+        context.job_queue.run_once(
+            lambda ctx: asyncio.create_task(delete_forwarded_messages(ctx, f"Question {question_index + 1} is live")),
+            2,  # 2 second delay to ensure message is forwarded
+            name=f"delete_forwarded_{question_index}"
+        )
         
         # Schedule next question or leaderboard
         if question_index + 1 < min(len(weekly_test.questions), MAX_QUESTIONS):
@@ -568,24 +572,6 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             )
         except Exception as e:
             logger.error(f"Error updating leaderboard: {e}")
-async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Monitor for and delete forwarded channel messages in the group"""
-    if not update.message or update.message.chat_id != DISCUSSION_GROUP_ID:
-        return
-        
-    msg = update.message
-    
-    # Check if this is a forwarded message from our channel
-    if (msg.forward_from_chat and
-        msg.forward_from_chat.id == CHANNEL_ID and
-        "Question" in msg.text and
-        "is live" in msg.text):
-        
-        try:
-            await msg.delete()
-            logger.info(f"Deleted forwarded message with ID: {msg.message_id}")
-        except Exception as e:
-            logger.error(f"Failed to delete forwarded message: {e}")
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
@@ -595,9 +581,6 @@ def main():
     application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("scheduletest", schedule_test_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("stopweekly", stop_test_command, filters=filters.ChatType.PRIVATE))
-
-    # Add this handler for all messages - place it BEFORE the other handlers
-    application.add_handler(MessageHandler(filters.ALL, handle_all_messages))
     
     # Other handlers
     application.add_handler(PollAnswerHandler(handle_poll_answer))
