@@ -99,20 +99,128 @@ async def delete_forwarded_messages(context, message_text_pattern):
     except Exception as e:
         logger.error(f"Error checking for forwarded messages: {e}")
 
-async def delete_channel_messages(context):
-    """Delete all channel messages from this test"""
+async def delete_forwarded_messages(context, message_text_pattern):
+    """Delete forwarded channel messages from group that match the pattern"""
     try:
-        for msg_id in weekly_test.channel_message_ids:
-            try:
-                await context.bot.delete_message(
-                    chat_id=CHANNEL_ID,
-                    message_id=msg_id
-                )
-            except Exception as e:
-                logger.warning(f"Couldn't delete channel message {msg_id}: {e}")
-        weekly_test.channel_message_ids = []
+        # Alternative approach using getUpdates
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset=-10&limit=10"
+            async with session.get(url) as response:
+                if response.status == 200:
+                    updates = await response.json()
+                    for update in updates.get('result', []):
+                        if (update.get('message', {}).get('chat', {}).get('id') == DISCUSSION_GROUP_ID and
+                           update.get('message', {}).get('forward_from_chat', {}).get('id') == CHANNEL_ID and
+                           message_text_pattern in update.get('message', {}).get('text', '')):
+                            
+                            await context.bot.delete_message(
+                                chat_id=DISCUSSION_GROUP_ID,
+                                message_id=update['message']['message_id']
+                            )
+                            logger.info(f"Deleted forwarded message: {update['message']['message_id']}")
+                            return
+        logger.warning("Target message not found")
     except Exception as e:
-        logger.error(f"Error deleting channel messages: {e}")
+        logger.error(f"Error deleting forwarded message: {e}")
+
+async def send_question(context, question_index):
+    """Send question to group and announcement to channel"""
+    global weekly_test
+    
+    if not weekly_test.active or question_index >= len(weekly_test.questions):
+        if weekly_test.active:
+            await send_leaderboard_results(context)
+        return
+
+    question = weekly_test.questions[question_index]
+    weekly_test.current_question_index = question_index
+    
+    try:
+        # Restrict messaging during quiz
+        await context.bot.set_chat_permissions(
+            DISCUSSION_GROUP_ID,
+            permissions={"can_send_messages": False}
+        )
+        
+        # Send poll to group
+        question_duration = get_question_duration(question_index)
+        group_message = await context.bot.send_poll(
+            chat_id=DISCUSSION_GROUP_ID,
+            question=f"❓ Question {question_index + 1}: {question['question']}",
+            options=question["options"],
+            is_anonymous=False,
+            protect_content=True,
+            allows_multiple_answers=False,
+            open_period=question_duration
+        )
+        
+        # Store poll info
+        weekly_test.poll_ids[question_index] = group_message.poll.id
+        weekly_test.poll_messages[question_index] = group_message.message_id
+        
+        # Send to channel with button
+        channel_message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=f"📢 *Question {question_index + 1} is live!*\n"
+                 f"⏱️ {question_duration} seconds to answer\n"
+                 f"👉 Join the discussion group to participate!",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
+            ])
+        )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
+        
+        # Immediately delete any forwarded version of this message from the group
+        await delete_forwarded_messages(context, f"Question {question_index + 1} is live")
+        
+        # Schedule next question or leaderboard
+        if question_index + 1 < min(len(weekly_test.questions), MAX_QUESTIONS):
+            context.job_queue.run_once(
+                lambda ctx: asyncio.create_task(send_question(ctx, question_index + 1)),
+                NEXT_QUESTION_DELAY, name="next_question"
+            )
+        else:
+            context.job_queue.run_once(
+                lambda ctx: asyncio.create_task(send_leaderboard_results(ctx)),
+                question_duration + 5, name="send_leaderboard"
+            )
+        
+        # Schedule poll closure
+        context.job_queue.run_once(
+            lambda ctx: asyncio.create_task(stop_poll_and_check_answers(ctx, question_index)),
+            question_duration, name=f"stop_poll_{question_index}"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error sending question {question_index + 1}: {e}")
+
+async def stop_poll_and_check_answers(context, question_index):
+    """Stop poll and show correct answer"""
+    global weekly_test
+    
+    if question_index not in weekly_test.poll_messages:
+        return
+    
+    question = weekly_test.questions[question_index]
+    
+    try:
+        # Don't explicitly stop poll since it auto-closes
+        # Just send correct answer
+        await context.bot.send_message(
+            chat_id=DISCUSSION_GROUP_ID,
+            text=f"✅ *Correct Answer:* {question['options'][question['correct_option']]}",
+            parse_mode="Markdown"
+        )
+        
+        if question_index + 1 >= min(len(weekly_test.questions), MAX_QUESTIONS):
+            await context.bot.set_chat_permissions(
+                DISCUSSION_GROUP_ID,
+                permissions={"can_send_messages": True}
+            )
+            
+    except Exception as e:
+        logger.error(f"Error handling poll closure: {e}")
 
 async def fetch_questions_from_url():
     """Fetch questions from external JSON URL"""
