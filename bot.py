@@ -6,8 +6,7 @@ import aiohttp
 import pytz
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler, CallbackQueryHandler, filters
-
+from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler, CallbackQueryHandler, MessageHandler, filters
 # Logging setup
 logging.basicConfig(
     level=logging.INFO,
@@ -71,61 +70,68 @@ class WeeklyTest:
 weekly_test = WeeklyTest()
 
 async def delete_forwarded_messages(context, message_text_pattern):
-    """Delete forwarded channel messages from group using direct API calls"""
+    """Delete forwarded channel messages from group"""
     try:
+        # Try to delete using the bot's delete_message method directly
+        # Get recent messages from the discussion group
+        messages = await context.bot.get_updates(offset=-1, limit=10, timeout=1)
+        
+        for update in messages:
+            if (hasattr(update, 'message') and update.message and 
+                update.message.chat_id == DISCUSSION_GROUP_ID and
+                hasattr(update.message, 'forward_from_chat') and update.message.forward_from_chat and
+                update.message.forward_from_chat.id == CHANNEL_ID and
+                message_text_pattern in update.message.text):
+                
+                try:
+                    await context.bot.delete_message(
+                        chat_id=DISCUSSION_GROUP_ID,
+                        message_id=update.message.message_id
+                    )
+                    logger.info(f"Deleted forwarded message: {update.message.message_id}")
+                    return
+                except Exception as e:
+                    logger.error(f"Failed to delete message via bot method: {e}")
+        
+        # Fallback to direct API call
         async with aiohttp.ClientSession() as session:
-            # First get the last message ID in the group
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChatHistory"
-            data = {
-                "chat_id": DISCUSSION_GROUP_ID,
-                "limit": 1
+            # Get recent messages
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+            params = {
+                "limit": 10,
+                "allowed_updates": ["message"]
             }
             
-            async with session.post(url, json=data) as response:
+            async with session.get(url, params=params) as response:
                 if response.status != 200:
-                    logger.error(f"Failed to get chat history: {response.status}")
+                    logger.error(f"Failed to get updates: {response.status}")
                     return
                 
                 result = await response.json()
-                if not result.get('result'):
-                    logger.warning("No messages in group")
-                    return
                 
-                last_message_id = result['result'][0]['message_id']
-            
-            # Now check recent messages (last 5)
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChatHistory"
-            data = {
-                "chat_id": DISCUSSION_GROUP_ID,
-                "from_message_id": max(1, last_message_id - 5),
-                "limit": 5
-            }
-            
-            async with session.post(url, json=data) as response:
-                if response.status != 200:
-                    logger.error(f"Failed to get chat history: {response.status}")
-                    return
-                
-                result = await response.json()
-                for msg in result.get('result', []):
-                    if (msg.get('forward_from_chat', {}).get('id') == CHANNEL_ID and
-                        message_text_pattern in msg.get('text', '')):
+                for update in result.get('result', []):
+                    message = update.get('message', {})
+                    forward = message.get('forward_from_chat', {})
+                    
+                    if (message.get('chat', {}).get('id') == DISCUSSION_GROUP_ID and
+                        forward.get('id') == CHANNEL_ID and
+                        message_text_pattern in message.get('text', '')):
                         
                         # Delete the matching message
-                        url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
-                        data = {
+                        delete_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
+                        delete_params = {
                             "chat_id": DISCUSSION_GROUP_ID,
-                            "message_id": msg['message_id']
+                            "message_id": message['message_id']
                         }
                         
-                        async with session.post(url, json=data) as del_response:
+                        async with session.post(delete_url, json=delete_params) as del_response:
                             if del_response.status == 200:
-                                logger.info(f"Deleted forwarded message: {msg['message_id']}")
+                                logger.info(f"Deleted forwarded message: {message['message_id']}")
                             else:
                                 logger.error(f"Failed to delete message: {del_response.status}")
                         return
-                
-                logger.warning("No forwarded message found to delete")
+        
+        logger.warning("No forwarded message found to delete")
     except Exception as e:
         logger.error(f"Error deleting forwarded messages: {e}")
 
@@ -611,6 +617,12 @@ def main():
     # Other handlers
     application.add_handler(PollAnswerHandler(handle_poll_answer))
     application.add_handler(CallbackQueryHandler(button_callback_handler))
+    # Add forwarded message filter
+from telegram.ext import MessageHandler, filters
+application.add_handler(MessageHandler(
+    filters.FORWARDED & filters.ChatType.GROUPS, 
+    filter_forwarded_channel_messages
+))
     
     # Error handler
     application.add_error_handler(lambda update, context: logger.error(f"Error: {context.error}", exc_info=True))
