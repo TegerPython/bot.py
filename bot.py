@@ -54,6 +54,10 @@ weekly_test_data = {
     'channel_message_ids': [],
     'group_link': None
 }
+weekly_questions = []
+weekly_question_index = 0
+weekly_poll_message_ids = []
+weekly_user_answers = {}
 
 # Load Questions
 def load_questions():
@@ -565,6 +569,35 @@ def main():
         )
     else:
         application.run_polling(drop_pending_updates=True)
+
+def save_leaderboard():
+    try:
+        github_token = os.getenv("GITHUB_TOKEN")
+        repo_owner = "TegerPython"
+        repo_name = "bot_data"
+        file_path = "leaderboard.json"
+
+        # GitHub API calls for saving leaderboard (same as previous implementation)
+        headers = {"Authorization": f"token {github_token}", "Accept": "application/vnd.github.v3+json"}
+        
+        # Existing leaderboard save logic
+        response = requests.get(f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}", headers=headers)
+        sha = response.json()["sha"]
+
+        content = json.dumps(leaderboard, indent=4).encode("utf-8")
+        encoded_content = base64.b64encode(content).decode("utf-8")
+
+        data = {
+            "message": "Update leaderboard",
+            "content": encoded_content,
+            "sha": sha,
+            "branch": "main",
+        }
+        requests.put(f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}", headers=headers, json=data)
+        
+        logger.info("Leaderboard saved successfully to GitHub.")
+    except Exception as e:
+        logger.error(f"Error saving leaderboard to GitHub: {e}")
 
 if __name__ == "__main__":
     main()
