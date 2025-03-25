@@ -601,6 +601,35 @@ def main():
     else:
         application.run_polling(drop_pending_updates=True)
 
+def main():
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # Command handlers
+    application.add_handler(CommandHandler("start", start_test_command))
+    application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
+    
+    # Poll answer handler
+    application.add_handler(PollAnswerHandler(handle_poll_answer))
+    
+    # Initial scheduling
+    application.job_queue.run_once(
+        lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
+        5,  # Initial delay to let the bot start
+        name="initial_schedule"
+    )
+    
+    # Start bot
+    if WEBHOOK_URL:
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=BOT_TOKEN,
+            webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+            drop_pending_updates=True
+        )
+    else:
+        application.run_polling(drop_pending_updates=True)
+
 def save_leaderboard():
     try:
         github_token = os.getenv("GITHUB_TOKEN")
