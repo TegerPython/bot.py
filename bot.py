@@ -179,11 +179,10 @@ async def send_question(context, question_index):
             chat_id=CHANNEL_ID,
             text=f"🎯 *QUESTION {question_index + 1} IS LIVE!* 🎯\n\n"
                  f"{time_emoji} *Hurry!* Only {QUESTION_DURATION} seconds to answer!\n"
-                 f"💡 Test your knowledge and earn points!\n\n"
-                 f"*Quick Tip:* Read carefully and choose wisely!",
+                 f"💡 Test your knowledge and earn points!\n\n",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🏁 Join Discussion", url=weekly_test.group_link)]
+                [InlineKeyboardButton("𝗘𝗡╸📝 Join Discussion", url=weekly_test.group_link)]
             ])
         )
         weekly_test.channel_message_ids.append(channel_message.message_id)
@@ -236,12 +235,12 @@ async def start_quiz(context):
         # Send quiz start message
         channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
-            text="🎮 *WEEKLY TEST STARTING NOW* 🎮\n\n"
+            text="*WEEKLY TEST STARTING NOW*\n\n"
                  "🌟 *Get ready for an exciting knowledge challenge!*\n"
                  "📊 Points awarded for correct answers\n",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🚀 Join Discussion", url=weekly_test.group_link)]
+                [InlineKeyboardButton("𝗘𝗡╸📝 Join Discussion", url=weekly_test.group_link)]
             ])
         )
         weekly_test.channel_message_ids.append(channel_message.message_id)
