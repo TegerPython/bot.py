@@ -603,11 +603,42 @@ async def schedule_weekly_test(context):
 
 # Command Handlers
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for testing daily questions (owner only)"""
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
-    await send_question(context)
-    await update.message.reply_text("✅ Test question sent.")
+    
+    global current_question, answered_users, current_message_id
+    answered_users = set()
+    current_question = random.choice(questions)
+    
+    try:
+        # Create options keyboard
+        keyboard = [
+            [InlineKeyboardButton(option, callback_data=option)] 
+            for option in current_question.get("options", [])
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # Send the test question
+        message = await context.bot.send_message(
+            chat_id=update.effective_chat.id,  # Send to private chat instead of channel
+            text=f"🧪 TEST MODE 🧪\n\n{current_question.get('question')}",
+            reply_markup=reply_markup,
+            disable_web_page_preview=True
+        )
+        
+        if message and message.message_id:
+            current_message_id = message.message_id
+            logger.info("Test question sent successfully to private chat")
+            await update.message.reply_text("✅ Test question sent to this chat.")
+        else:
+            logger.error("Failed to send test question")
+            await update.message.reply_text("❌ Failed to send test question.")
+            
+    except Exception as e:
+        logger.error(f"Error in test_question: {e}")
+        await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -640,7 +671,39 @@ async def test_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
-    await start_test_command(update, context)
+    
+    try:
+        questions = await fetch_questions_from_url()
+        if not questions:
+            await update.message.reply_text("❌ No questions available")
+            return
+            
+        weekly_test.reset()
+        weekly_test.questions = questions
+        weekly_test.active = True
+        
+        # Get group invite link
+        chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
+        weekly_test.group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
+        
+        # Send initial message to channel
+        channel_message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text="📢 *Weekly Test Starting Now!*\n"
+                 "Join the Discussion group to participate!...",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
+            ])
+        )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
+        
+        await update.message.reply_text("🚀 Starting weekly test...")
+        await send_weekly_question(context, 0)  # Start with first question
+        
+    except Exception as e:
+        logger.error(f"Error starting test: {e}")
+        await update.message.reply_text(f"❌ Failed to start: {str(e)}")
 
 def get_utc_time(hour, minute, timezone_str):
     tz = pytz.timezone(timezone_str)
