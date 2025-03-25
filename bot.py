@@ -178,8 +178,9 @@ async def send_question(context, question_index):
         channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text=f"🎯 *QUESTION {question_index + 1} IS LIVE!* 🎯\n\n"
-                 f"{time_emoji} *Hurry!* Only {QUESTION_DURATION} seconds to añswer!\n"
-                 f"💡 Test your knowledge and earn points!\n\n",
+                 f"{time_emoji} *Hurry!* Only {QUESTION_DURATION} seconds to answer!\n"
+                 f"💡 Test your knowledge and earn points!\n\n"
+                    f"TegerDiscussions",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("𝗘𝗡╸📝 Join Discussion", url=weekly_test.group_link)]
@@ -237,7 +238,8 @@ async def start_quiz(context):
             chat_id=CHANNEL_ID,
             text="*WEEKLY TEST STARTING ÑOW*\n\n"
                  "🌟 *Get ready for an exciting knowledge challenge!*\n"
-                 "📊 Points awarded for correct answers\n",
+                 "📊 Points awarded for correct answers\n"
+                    "TegerDiscussions",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("𝗘𝗡╸📝 Join Discussion", url=weekly_test.group_link)]
