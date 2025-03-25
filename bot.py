@@ -167,6 +167,27 @@ async def send_question(context, question_index):
         weekly_test.poll_ids[question_index] = group_message.poll.id
         weekly_test.poll_messages[question_index] = group_message.message_id
         
+        # Prepare channel message with dynamic timing
+        time_emoji = "⏱️"
+        if QUESTION_DURATION <= 10:
+            time_emoji = "🚨"
+        elif QUESTION_DURATION <= 20:
+            time_emoji = "⏳"
+        
+        # Send channel announcement
+        channel_message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=f"🎯 *QUESTION {question_index + 1} IS LIVE!* 🎯\n\n"
+                 f"{time_emoji} *Hurry!* Only {QUESTION_DURATION} seconds to answer!\n"
+                 f"💡 Test your knowledge and earn points!\n\n"
+                 f"*Quick Tip:* Read carefully and choose wisely!",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏁 Join Discussion", url=weekly_test.group_link)]
+            ])
+        )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
+        
         # Schedule next question or leaderboard
         if question_index + 1 < min(len(weekly_test.questions), MAX_QUESTIONS):
             context.job_queue.run_once(
@@ -190,6 +211,47 @@ async def send_question(context, question_index):
         
     except Exception as e:
         logger.error(f"Error sending question {question_index + 1}: {e}")
+
+async def start_quiz(context):
+    """Start the weekly quiz"""
+    try:
+        # Fetch questions
+        questions = await fetch_questions_from_url()
+        if not questions:
+            logger.error("No questions available for the quiz")
+            return
+        
+        # Reset test and set questions
+        weekly_test.reset()
+        weekly_test.questions = questions
+        weekly_test.active = True
+        
+        # Get group invite link
+        chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
+        weekly_test.group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
+        
+        # Delete previous teaser message
+        await delete_channel_messages(context)
+        
+        # Send quiz start message
+        channel_message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text="🎮 *WEEKLY TEST STARTING NOW* 🎮\n\n"
+                 "🌟 *Get ready for an exciting knowledge challenge!*\n"
+                 "📊 Points awarded for correct answers\n"
+                 "⚡ Stay sharp and focused!",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🚀 Join Discussion", url=weekly_test.group_link)]
+            ])
+        )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
+        
+        # Start first question
+        await send_question(context, 0)
+        
+    except Exception as e:
+        logger.error(f"Quiz start error: {e}")
 
 async def stop_poll_and_check_answers(context, question_index):
     """Handle poll closure and reveal answer"""
