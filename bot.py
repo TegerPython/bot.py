@@ -651,6 +651,13 @@ async def schedule_weekly_test(context):
     except Exception as e:
         logger.error(f"Error scheduling weekly test: {e}")
 
+def get_utc_time(hour, minute, timezone_str):
+    """Converts a local time to UTC time."""
+    local_tz = pytz.timezone(timezone_str)
+    local_dt = datetime.now(local_tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    utc_dt = local_dt.astimezone(pytz.utc)
+    return utc_dt.time()
+
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     job_queue = application.job_queue
@@ -704,6 +711,3 @@ def main():
         url_path=BOT_TOKEN,
         webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
     )
-
-if __name__ == "__main__":
-    main()
