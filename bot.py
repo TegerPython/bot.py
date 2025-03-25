@@ -85,14 +85,41 @@ class QuizManager:
             logger.error(f"Error saving daily leaderboard: {e}")
 
     async def fetch_questions(self, url):
+        """Fetch questions from URL with robust error handling"""
+        if not url:
+            logger.error("No URL provided for fetching questions")
+            return []
+
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
+                async with session.get(url, timeout=10) as response:
                     if response.status == 200:
-                        return await response.json()
+                        # Handle GitHub raw file peculiarities
+                        content_type = response.headers.get('Content-Type', '')
+                        text_content = await response.text()
+                        
+                        # Try different parsing methods
+                        try:
+                            # First try standard JSON parsing
+                            questions = json.loads(text_content)
+                        except json.JSONDecodeError:
+                            # If standard parsing fails, try stripping potential BOM or whitespace
+                            try:
+                                questions = json.loads(text_content.strip())
+                            except json.JSONDecodeError:
+                                logger.error(f"Failed to parse JSON from {url}")
+                                return []
+                        
+                        if not questions:
+                            logger.warning(f"No questions found in {url}")
+                        
+                        return questions
+                    else:
+                        logger.error(f"HTTP error {response.status} fetching from {url}")
+                        return []
         except Exception as e:
             logger.error(f"Error fetching questions from {url}: {e}")
-        return []
+            return []
 
     async def send_daily_question(self, context):
         """Send a daily trivia question"""
