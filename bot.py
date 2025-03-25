@@ -1,4 +1,4 @@
-fullimport os
+import os
 import logging
 import asyncio
 import json
