@@ -4,6 +4,7 @@ import random
 import json
 import requests
 import time
+import aiohttp
 import asyncio
 import pytz
 import base64
@@ -12,54 +13,40 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue, PollAnswerHandler, filters
 
 # Logging setup
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Environment Variables
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+logger.info(f"BOT_TOKEN: {BOT_TOKEN}")
+
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
-OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0"))
+OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
 DISCUSSION_GROUP_ID = int(os.getenv("DISCUSSION_GROUP_ID", "0"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-PORT = int(os.getenv("PORT", "5000"))
-WEEKLY_QUESTIONS_JSON_URL = os.getenv("WEEKLY_QUESTIONS_JSON_URL")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
 LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
-API_AUTH_TOKEN = os.getenv("API_AUTH_TOKEN", "")
+WEEKLY_QUESTIONS_JSON_URL = os.getenv("WEEKLY_QUESTIONS_JSON_URL")
+PORT = int(os.getenv("PORT", "5000"))
 
 # Constants
 QUESTION_DURATION = 30  # Default duration (seconds)
 NEXT_QUESTION_DELAY = 2  # seconds between questions
 MAX_QUESTIONS = 10  # Maximum number of questions per test
 
-# Global variables for daily questions
+# Global variables
 questions = []
 leaderboard = {}
 current_question = None
 current_message_id = None
 user_answers = {}
-answered_users = set()
-
-# Global variables for weekly test
-weekly_test_data = {
-    'questions': [],
-    'current_question_index': 0,
-    'participants': {},
-    'active': False,
-    'poll_ids': {},
-    'poll_messages': {},
-    'channel_message_ids': [],
-    'group_link': None
-}
 weekly_questions = []
 weekly_question_index = 0
 weekly_poll_message_ids = []
 weekly_user_answers = {}
+answered_users = set()
 
-# Load Questions
+# Load Questions from URL
 def load_questions():
     global questions
     try:
@@ -74,7 +61,7 @@ def load_questions():
     except Exception as e:
         logger.error(f"Error loading questions: {e}")
 
-# Load Leaderboard
+# Load Leaderboard from URL
 def load_leaderboard():
     global leaderboard
     try:
@@ -108,7 +95,6 @@ load_questions()
 load_leaderboard()
 load_weekly_questions()
 
-# Daily Questions Functions
 async def send_question(context: ContextTypes.DEFAULT_TYPE):
     global current_question, answered_users, current_message_id
     answered_users = set()
@@ -126,6 +112,10 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
         )
         if message and message.message_id:
             current_message_id = message.message_id
+            logger.info("send_question: message sent successfully")
+        else:
+            logger.info("send_question: message sending failed")
+
     except Exception as e:
         logger.error(f"send_question: Failed to send question: {e}")
 
@@ -143,6 +133,9 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     answered_users.add(user_id)
     user_answer = query.data.strip()
     correct_answer = current_question.get("correct_option", "").strip()
+
+    logger.info(f"User answer: '{user_answer}'")
+    logger.info(f"Correct answer: '{correct_answer}'")
 
     correct = user_answer == correct_answer
 
@@ -171,6 +164,71 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await query.answer("❌ Incorrect.")
     save_leaderboard()
+
+def save_leaderboard():
+    try:
+        github_token = os.getenv("GITHUB_TOKEN")
+        repo_owner = "TegerPython"  # Replace with your GitHub username
+        repo_name = "bot_data"  # Replace with your repository name
+        file_path = "leaderboard.json"
+
+        # Get the current file's SHA for updating
+        get_file_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
+        headers = {"Authorization": f"token {github_token}", "Accept": "application/vnd.github.v3+json"}
+        get_response = requests.get(get_file_url, headers=headers)
+        get_response.raise_for_status()
+        sha = get_response.json()["sha"]
+
+        # Update the file
+        content = json.dumps(leaderboard, indent=4).encode("utf-8")
+        encoded_content = base64.b64encode(content).decode("utf-8")
+
+        update_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
+        data = {
+            "message": "Update leaderboard",
+            "content": encoded_content,
+            "sha": sha,
+            "branch": "main",  # Or your branch name
+        }
+        update_response = requests.put(update_url, headers=headers, json=data)
+        update_response.raise_for_status()
+
+        logger.info("Leaderboard saved successfully to GitHub.")
+    except Exception as e:
+        logger.error(f"Error saving leaderboard to GitHub: {e}")
+
+async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    await send_question(context)
+    await update.message.reply_text("✅ Test question sent.")
+
+async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
+
+async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    await context.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}")
+    await update.message.reply_text("✅ Webhook refreshed.")
+
+async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        logger.info(f"Leaderboard data: {leaderboard}")
+        sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
+        leaderboard_text = "🏆 Leaderboard 🏆\n\n"
+        for rank, (user_id, player) in enumerate(sorted_leaderboard, start=1):
+            leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
+        await update.message.reply_text(leaderboard_text)
+    except KeyError as e:
+        logger.error(f"Error in leaderboard_command: KeyError - {e}")
+        await update.message.reply_text("❌ Failed to display leaderboard due to data error.")
+    except Exception as e:
+        logger.error(f"Error in leaderboard_command: {e}")
+        await update.message.reply_text("❌ Failed to display leaderboard.")
 
 # Weekly Test Functions
 class WeeklyTest:
@@ -512,33 +570,75 @@ async def create_countdown_teaser(context):
         
         # Create countdown job
         async def update_countdown(remaining_time):
-    try:
-        await context.bot.edit_message_text(
-            chat_id=CHANNEL_ID,
-            message_id=message.message_id,
-            text=f"🕒 *Quiz Countdown!*\n\n"
-                 f"The weekly quiz starts in {remaining_time // 60:02d}:{remaining_time % 60:02d} minutes!\n"
-                 "Get ready to test your knowledge!",
-            parse_mode="Markdown",
-            reply_markup=message.reply_markup
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=CHANNEL_ID,
+                    message_id=message.message_id,
+                    text=f"🕒 *Quiz Countdown!*\n\n"
+                         f"The weekly quiz starts in {remaining_time // 60:02d}:{remaining_time % 60:02d} minutes!\n"
+                         "Get ready to test your knowledge!",
+                    parse_mode="Markdown",
+                    reply_markup=message.reply_markup
+                )
+            except Exception as e:
+                logger.error(f"Countdown update error: {e}")
+        
+        # Schedule countdown updates every minute
+        for i in range(29, 0, -1):
+            context.job_queue.run_once(
+                lambda ctx, time=i*60: asyncio.create_task(update_countdown(time)),
+                (30-i)*60,
+                name=f"countdown_{i}"
+            )
+        
+        # Final job to start quiz and delete teaser
+        context.job_queue.run_once(
+            lambda ctx: asyncio.create_task(start_quiz(ctx)),
+            1800,  # 30 minutes
+            name="start_quiz"
         )
+        
     except Exception as e:
-        logger.error(f"Countdown update error: {e}")
+        logger.error(f"Countdown teaser error: {e}")
 
-# Schedule countdown updates every minute
-for i in range(29, 0, -1):
-    context.job_queue.run_once(
-        lambda ctx, time=i*60: asyncio.create_task(update_countdown(time)),
-        (30-i)*60,
-        name=f"countdown_{i}"
-    )
-
-# Final job to start quiz and delete teaser
-context.job_queue.run_once(
-    lambda ctx: asyncio.create_task(start_quiz(ctx)),
-    1800,  # 30 minutes
-    name="start_quiz"
-)
+async def start_quiz(context):
+    """Start the weekly quiz"""
+    try:
+        # Fetch questions
+        questions = await fetch_questions_from_url()
+        if not questions:
+            logger.error("No questions available for the quiz")
+            return
+        
+        # Reset test and set questions
+        weekly_test.reset()
+        weekly_test.questions = questions
+        weekly_test.active = True
+        
+        # Get group invite link
+        chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
+        weekly_test.group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
+        
+        # Delete previous teaser message
+        await delete_channel_messages(context)
+        
+        # Send quiz start message
+        channel_message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text="🚀 *Quiz Starts Now!*\n"
+                 "Get ready for the weekly challenge!",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
+            ])
+        )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
+        
+        # Start first question
+        await send_question(context, 0)
+        
+    except Exception as e:
+        logger.error(f"Quiz start error: {e}")
 
 async def schedule_weekly_test(context):
     """Schedule weekly test for Friday 6 PM Gaza time"""
@@ -600,64 +700,6 @@ def main():
         )
     else:
         application.run_polling(drop_pending_updates=True)
-
-def main():
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # Command handlers
-    application.add_handler(CommandHandler("start", start_test_command))
-    application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
-    
-    # Poll answer handler
-    application.add_handler(PollAnswerHandler(handle_poll_answer))
-    
-    # Initial scheduling
-    application.job_queue.run_once(
-        lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
-        5,  # Initial delay to let the bot start
-        name="initial_schedule"
-    )
-    
-    # Start bot
-    if WEBHOOK_URL:
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=BOT_TOKEN,
-            webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-            drop_pending_updates=True
-        )
-    else:
-        application.run_polling(drop_pending_updates=True)
-
-def save_leaderboard():
-    try:
-        github_token = os.getenv("GITHUB_TOKEN")
-        repo_owner = "TegerPython"
-        repo_name = "bot_data"
-        file_path = "leaderboard.json"
-
-        # GitHub API calls for saving leaderboard (same as previous implementation)
-        headers = {"Authorization": f"token {github_token}", "Accept": "application/vnd.github.v3+json"}
-        
-        # Existing leaderboard save logic
-        response = requests.get(f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}", headers=headers)
-        sha = response.json()["sha"]
-
-        content = json.dumps(leaderboard, indent=4).encode("utf-8")
-        encoded_content = base64.b64encode(content).decode("utf-8")
-
-        data = {
-            "message": "Update leaderboard",
-            "content": encoded_content,
-            "sha": sha,
-            "branch": "main",
-        }
-        requests.put(f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}", headers=headers, json=data)
-        
-        logger.info("Leaderboard saved successfully to GitHub.")
-    except Exception as e:
-        logger.error(f"Error saving leaderboard to GitHub: {e}")
 
 if __name__ == "__main__":
     main()
