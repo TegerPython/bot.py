@@ -437,12 +437,11 @@ async def start_quiz(context):
         # Send quiz start message
         channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
-            text="*WEEKLY TEST STARTING NOW*\n\n"
-                 "🌟 *Get ready for an excíting knowledge challenge!*\n"
-                 "📊 Points awarded for correct answers\n",
+            text="🚀 *Quiz Starts Now!*\n"
+                 "Get ready for the weekly challenge!",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("𝗘𝗡╸📝 Join Discussion", url=weekly_test.group_link)]
+                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
             ])
         )
         weekly_test.channel_message_ids.append(channel_message.message_id)
