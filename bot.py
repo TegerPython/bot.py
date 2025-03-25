@@ -7,6 +7,7 @@ import time
 import asyncio
 import base64
 import pytz
+import aiohttp
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, PollAnswerHandler, JobQueue, filters
@@ -72,7 +73,7 @@ class WeeklyTest:
 
 weekly_test = WeeklyTest()
 
-# Load Questions and Leaderboard
+# Load Questions and Leaderboard Functions
 def load_questions():
     global questions, weekly_questions, leaderboard
     try:
@@ -95,6 +96,29 @@ def load_questions():
         logger.info("Loaded leaderboard successfully")
     except Exception as e:
         logger.error(f"Error loading data: {e}")
+
+async def fetch_questions_from_url():
+    """Fetch questions from external JSON URL"""
+    try:
+        if not WEEKLY_QUESTIONS_JSON_URL:
+            logger.error("WEEKLY_QUESTIONS_JSON_URL not set")
+            return []
+            
+        async with aiohttp.ClientSession() as session:
+            async with session.get(WEEKLY_QUESTIONS_JSON_URL) as response:
+                if response.status == 200:
+                    text_content = await response.text()
+                    try:
+                        data = json.loads(text_content)
+                        logger.info(f"Fetched {len(data)} questions")
+                        return data[:10]  # Limit to 10 questions
+                    except json.JSONDecodeError as je:
+                        logger.error(f"JSON error: {je}, content: {text_content[:200]}...")
+                        return []
+                logger.error(f"Failed to fetch: HTTP {response.status}")
+    except Exception as e:
+        logger.error(f"Error fetching questions: {e}")
+    return []
 
 # Daily Quiz Functions
 async def send_question(context: ContextTypes.DEFAULT_TYPE):
@@ -165,6 +189,44 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_leaderboard()
 
 # Weekly Quiz Functions
+async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start test immediately (owner only)"""
+    if update.effective_chat.type != "private" or update.effective_user.id != OWNER_ID:
+        return
+        
+    try:
+        questions = await fetch_questions_from_url()
+        if not questions:
+            await update.message.reply_text("❌ No questions available")
+            return
+            
+        weekly_test.reset()
+        weekly_test.questions = questions
+        weekly_test.active = True
+        
+        # Get group invite link
+        chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
+        weekly_test.group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
+        
+        # Send initial message to channel
+        channel_message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text="📢 *Weekly Test Starting Now!*\n"
+                 "Join the Discussion group to participate!",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
+            ])
+        )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
+        
+        await update.message.reply_text("🚀 Starting weekly test...")
+        await send_weekly_question(context, 0)
+        
+    except Exception as e:
+        logger.error(f"Error starting test: {e}")
+        await update.message.reply_text(f"❌ Failed to start: {str(e)}")
+
 async def delete_channel_messages(context):
     """Delete all channel messages from this test"""
     try:
@@ -265,33 +327,6 @@ async def send_leaderboard_results(context):
     except Exception as e:
         logger.error(f"Error sending leaderboard: {e}")
 
-async def start_weekly_test(context):
-    """Start the weekly quiz"""
-    try:
-        questions = weekly_questions[:10]  # Take first 10 questions
-        if not questions:
-            logger.error("No weekly questions available")
-            return
-            
-        weekly_test.reset()
-        weekly_test.questions = questions
-        weekly_test.active = True
-        
-        # Send quiz start message
-        channel_message = await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text="🚀 *Weekly Quiz Starts Now!*\n"
-                 "Get ready for the challenge!",
-            parse_mode="Markdown"
-        )
-        weekly_test.channel_message_ids.append(channel_message.message_id)
-        
-        # Start first question
-        await send_weekly_question(context, 0)
-        
-    except Exception as e:
-        logger.error(f"Weekly quiz start error: {e}")
-
 async def handle_weekly_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle weekly poll answers"""
     global weekly_test
@@ -317,6 +352,33 @@ async def handle_weekly_poll_answer(update: Update, context: ContextTypes.DEFAUL
             
     except Exception as e:
         logger.error(f"Error handling weekly poll answer: {e}")
+
+async def start_weekly_test(context):
+    """Start the weekly quiz"""
+    try:
+        questions = await fetch_questions_from_url()
+        if not questions:
+            logger.error("No weekly questions available")
+            return
+            
+        weekly_test.reset()
+        weekly_test.questions = questions
+        weekly_test.active = True
+        
+        # Send quiz start message
+        channel_message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text="🚀 *Weekly Quiz Starts Now!*\n"
+                 "Get ready for the challenge!",
+            parse_mode="Markdown"
+        )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
+        
+        # Start first question
+        await send_weekly_question(context, 0)
+        
+    except Exception as e:
+        logger.error(f"Weekly quiz start error: {e}")
 
 async def schedule_weekly_test(context):
     """Schedule weekly test for Friday 6 PM Gaza time"""
@@ -345,7 +407,7 @@ async def schedule_weekly_test(context):
     except Exception as e:
         logger.error(f"Error scheduling weekly test: {e}")
 
-# Helper Functions
+# Leaderboard and Utility Functions
 def save_leaderboard():
     try:
         github_token = os.getenv("GITHUB_TOKEN")
@@ -378,13 +440,28 @@ def save_leaderboard():
     except Exception as e:
         logger.error(f"Error saving leaderboard to GitHub: {e}")
 
-async def test_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Manual trigger for weekly test (for owner)"""
+async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Display leaderboard"""
+    try:
+        sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
+        leaderboard_text = "🏆 Leaderboard 🏆\n\n"
+        for rank, (user_id, player) in enumerate(sorted_leaderboard, start=1):
+            leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
+        await update.message.reply_text(leaderboard_text)
+    except KeyError as e:
+        logger.error(f"Error in leaderboard_command: KeyError - {e}")
+        await update.message.reply_text("❌ Failed to display leaderboard due to data error.")
+    except Exception as e:
+        logger.error(f"Error in leaderboard_command: {e}")
+        await update.message.reply_text("❌ Failed to display leaderboard.")
+
+async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set webhook for the bot"""
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
-    await start_weekly_test(context)
-    await update.message.reply_text("✅ Weekly test triggered.")
+    await context.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}")
+    await update.message.reply_text("✅ Webhook refreshed.")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
     """Send periodic heartbeat to owner"""
@@ -411,8 +488,6 @@ def main():
     job_queue.run_daily(send_question, get_utc_time(18, 0, "Asia/Gaza"))
 
     # Weekly test scheduling
-    friday = 4  # Monday is 0, Tuesday is 1, ..., Friday is 4
-    context = ContextTypes.DEFAULT_TYPE
     job_queue.run_once(
         lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
         5,  # Initial delay
@@ -423,9 +498,12 @@ def main():
     job_queue.run_repeating(heartbeat, interval=60)
 
     # Handlers
-    application.add_handler(CommandHandler("test", test_weekly))
+    application.add_handler(CommandHandler("start", start_test_command))
+    application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("test", start_test_command))
+    application.add_handler(CommandHandler("setwebhook", set_webhook))
+    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
     application.add_handler(CallbackQueryHandler(handle_answer))
-    application.add_handler(CommandHandler("testweekly", test_weekly))
     application.add_handler(PollAnswerHandler(handle_weekly_poll_answer))
 
     # Start bot
