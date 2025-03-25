@@ -45,6 +45,7 @@ weekly_question_index = 0
 weekly_poll_message_ids = []
 weekly_user_answers = {}
 answered_users = set()
+used_weekly_questions = set()
 
 # Load Questions from URL
 def load_questions():
@@ -309,7 +310,10 @@ async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
             
         weekly_test.reset()
-        weekly_test.questions = questions
+        weekly_test.questions = [q for q in questions if q["id"] not in used_weekly_questions]
+        if not weekly_test.questions:
+            await update.message.reply_text("❌ No new questions available for the weekly quiz")
+            return
         weekly_test.active = True
         
         # Get group invite link
@@ -337,7 +341,7 @@ async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def send_question(context, question_index):
     """Send question to group and announcement to channel"""
-    global weekly_test
+    global weekly_test, used_weekly_questions
     
     if not weekly_test.active or question_index >= len(weekly_test.questions):
         if weekly_test.active:
@@ -346,6 +350,7 @@ async def send_question(context, question_index):
 
     question = weekly_test.questions[question_index]
     weekly_test.current_question_index = question_index
+    used_weekly_questions.add(question["id"])
     
     try:
         # Restrict messaging during quiz
@@ -424,7 +429,10 @@ async def start_quiz(context):
         
         # Reset test and set questions
         weekly_test.reset()
-        weekly_test.questions = questions
+        weekly_test.questions = [q for q in questions if q["id"] not in used_weekly_questions]
+        if not weekly_test.questions:
+            logger.error("No new questions available for the weekly quiz")
+            return
         weekly_test.active = True
         
         # Get group invite link
@@ -520,6 +528,10 @@ async def send_leaderboard_results(context):
                 message += f"🥉 *{data['name']}* - {data['score']} pts\n"
             else:
                 message += f"{i}. {data['name']} - {data['score']} pts\n"
+            # Add weekly scores to main leaderboard
+            if str(user_id) not in leaderboard:
+                leaderboard[str(user_id)] = {"username": data["name"], "score": 0}
+            leaderboard[str(user_id)]["score"] += data["score"]
     else:
         message += "No participants this week."
     
@@ -544,6 +556,7 @@ async def send_leaderboard_results(context):
         )
         
         weekly_test.active = False
+        save_leaderboard()  # Save the updated leaderboard
     except Exception as e:
         logger.error(f"Error sending leaderboard: {e}")
 
@@ -611,7 +624,10 @@ async def start_quiz(context):
         
         # Reset test and set questions
         weekly_test.reset()
-        weekly_test.questions = questions
+        weekly_test.questions = [q for q in questions if q["id"] not in used_weekly_questions]
+        if not weekly_test.questions:
+            logger.error("No new questions available for the weekly quiz")
+            return
         weekly_test.active = True
         
         # Get group invite link
