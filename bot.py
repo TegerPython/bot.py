@@ -117,8 +117,8 @@ async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Send initial message to channel
         channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
-            text="📢 *Weekly Test Starting Now!*\n"
-                 "Questions will appear in the discussion group shortly...",
+            text="📢 *Weekly Test Starting Ñow!*\n"
+                 "Join the discussion group to participate!...",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
@@ -178,7 +178,7 @@ async def send_question(context, question_index):
         channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text=f"🎯 *QUESTION {question_index + 1} IS LIVE!* 🎯\n\n"
-                 f"{time_emoji} *Hurry!* Only {QUESTION_DURATION} seconds to answer!\n"
+                 f"{time_emoji} *Hurry!* Only {QUESTION_DURATION} seconds to añswer!\n"
                  f"💡 Test your knowledge and earn points!\n\n",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
@@ -235,7 +235,7 @@ async def start_quiz(context):
         # Send quiz start message
         channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
-            text="*WEEKLY TEST STARTING NOW*\n\n"
+            text="*WEEKLY TEST STARTING ÑOW*\n\n"
                  "🌟 *Get ready for an exciting knowledge challenge!*\n"
                  "📊 Points awarded for correct answers\n",
             parse_mode="Markdown",
