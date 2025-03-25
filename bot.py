@@ -1,12 +1,16 @@
 import os
 import logging
-import asyncio
+import random
 import json
+import requests
+import time
+import asyncio
 import aiohttp
-import pytz
+import base64
 from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, PollAnswerHandler, CallbackQueryHandler, filters
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue, PollAnswerHandler
+import pytz
 
 # Logging setup
 logging.basicConfig(
@@ -17,19 +21,29 @@ logger = logging.getLogger(__name__)
 
 # Environment Variables
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
-OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0"))
-DISCUSSION_GROUP_ID = int(os.getenv("DISCUSSION_GROUP_ID", "0"))
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-PORT = int(os.getenv("PORT", "8443"))
+QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
+LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
 WEEKLY_QUESTIONS_JSON_URL = os.getenv("WEEKLY_QUESTIONS_JSON_URL")
+DISCUSSION_GROUP_ID = int(os.getenv("DISCUSSION_GROUP_ID", "0"))
 API_AUTH_TOKEN = os.getenv("API_AUTH_TOKEN", "")
 
-# Constants
+# Constants for Weekly Quiz
 QUESTION_DURATION = 30  # Default duration (seconds)
 NEXT_QUESTION_DELAY = 2  # seconds between questions
 MAX_QUESTIONS = 10  # Maximum number of questions per test
 
+# Global variables for daily quiz
+questions = []
+leaderboard = {}
+current_question = None
+current_message_id = None
+user_answers = {}
+answered_users = set()
+
+# Weekly Quiz Class
 class WeeklyTest:
     def __init__(self):
         self.reset()
@@ -57,6 +71,173 @@ class WeeklyTest:
         )
 
 weekly_test = WeeklyTest()
+
+# ==================== DAILY QUIZ FUNCTIONS ====================
+
+def load_questions():
+    global questions
+    try:
+        response = requests.get(QUESTIONS_JSON_URL)
+        response.raise_for_status()
+        questions = response.json()
+        logger.info(f"Loaded {len(questions)} questions from {QUESTIONS_JSON_URL}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching questions from {QUESTIONS_JSON_URL}: {e}")
+    except json.JSONDecodeError:
+        logger.error(f"Error decoding JSON from {QUESTIONS_JSON_URL}")
+    except Exception as e:
+        logger.error(f"Error loading questions: {e}")
+
+def load_leaderboard():
+    global leaderboard
+    try:
+        response = requests.get(LEADERBOARD_JSON_URL)
+        response.raise_for_status()
+        leaderboard = response.json()
+        logger.info(f"Loaded leaderboard from {LEADERBOARD_JSON_URL}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching leaderboard from {LEADERBOARD_JSON_URL}: {e}")
+    except json.JSONDecodeError:
+        logger.error(f"Error decoding leaderboard from {LEADERBOARD_JSON_URL}")
+    except Exception as e:
+        logger.error(f"Error loading leaderboard: {e}")
+
+async def send_question(context: ContextTypes.DEFAULT_TYPE):
+    global current_question, answered_users, current_message_id
+    answered_users = set()
+    current_question = random.choice(questions)
+    keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in current_question.get("options", [])]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    try:
+        message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=current_question.get("question"),
+            reply_markup=reply_markup,
+            disable_web_page_preview=True,
+            disable_notification=False,
+        )
+        if message and message.message_id:
+            current_message_id = message.message_id
+            logger.info("send_question: message sent successfully")
+        else:
+            logger.info("send_question: message sending failed")
+
+    except Exception as e:
+        logger.error(f"send_question: Failed to send question: {e}")
+
+async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global answered_users, current_question, current_message_id, leaderboard
+
+    query = update.callback_query
+    user_id = query.from_user.id
+    username = query.from_user.first_name
+
+    if user_id in answered_users:
+        await query.answer("❌ You already answered this question.")
+        return
+
+    answered_users.add(user_id)
+    user_answer = query.data.strip()
+    correct_answer = current_question.get("correct_option", "").strip()
+
+    logger.info(f"User answer: '{user_answer}'")
+    logger.info(f"Correct answer: '{correct_answer}'")
+
+    correct = user_answer == correct_answer
+
+    if correct:
+        await query.answer("✅ Correct!")
+        if str(user_id) not in leaderboard:
+            leaderboard[str(user_id)] = {"username": username, "score": 0}
+        leaderboard[str(user_id)]["score"] += 1
+
+        explanation = current_question.get("explanation", "No explanation provided.")
+        edited_text = (
+            "📝 Daily Challenge (Answered)\n\n"
+            f"Question: {current_question.get('question')}\n"
+            f"✅ Correct Answer: {current_question.get('correct_option')}\n"
+            f"ℹ️ Explanation: {explanation}\n\n"
+            f"🏆 Winner: {username}"
+        )
+        try:
+            await context.bot.edit_message_text(
+                chat_id=CHANNEL_ID,
+                message_id=current_message_id,
+                text=edited_text
+            )
+        except Exception as e:
+            logger.error(f"Failed to edit message: {e}")
+    else:
+        await query.answer("❌ Incorrect.")
+    save_leaderboard()
+
+def save_leaderboard():
+    try:
+        github_token = os.getenv("GITHUB_TOKEN")
+        repo_owner = "TegerPython"  # Replace with your GitHub username
+        repo_name = "bot_data"  # Replace with your repository name
+        file_path = "leaderboard.json"
+
+        # Get the current file's SHA for updating
+        get_file_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
+        headers = {"Authorization": f"token {github_token}", "Accept": "application/vnd.github.v3+json"}
+        get_response = requests.get(get_file_url, headers=headers)
+        get_response.raise_for_status()
+        sha = get_response.json()["sha"]
+
+        # Update the file
+        content = json.dumps(leaderboard, indent=4).encode("utf-8")
+        encoded_content = base64.b64encode(content).decode("utf-8")
+
+        update_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
+        data = {
+            "message": "Update leaderboard",
+            "content": encoded_content,
+            "sha": sha,
+            "branch": "main",  # Or your branch name
+        }
+        update_response = requests.put(update_url, headers=headers, json=data)
+        update_response.raise_for_status()
+
+        logger.info("Leaderboard saved successfully to GitHub.")
+    except Exception as e:
+        logger.error(f"Error saving leaderboard to GitHub: {e}")
+
+async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    await send_question(context)
+    await update.message.reply_text("✅ Test question sent.")
+
+async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
+
+async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    await context.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}")
+    await update.message.reply_text("✅ Webhook refreshed.")
+
+async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        logger.info(f"Leaderboard data: {leaderboard}")
+        sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
+        leaderboard_text = "🏆 Leaderboard 🏆\n\n"
+        for rank, (user_id, player) in enumerate(sorted_leaderboard, start=1):
+            leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
+        await update.message.reply_text(leaderboard_text)
+    except KeyError as e:
+        logger.error(f"Error in leaderboard_command: KeyError - {e}")
+        await update.message.reply_text("❌ Failed to display leaderboard due to data error.")
+    except Exception as e:
+        logger.error(f"Error in leaderboard_command: {e}")
+        await update.message.reply_text("❌ Failed to display leaderboard.")
+
+# ==================== WEEKLY QUIZ FUNCTIONS ====================
 
 async def delete_channel_messages(context):
     """Delete all channel messages from this test"""
@@ -95,6 +276,7 @@ async def fetch_questions_from_url():
     except Exception as e:
         logger.error(f"Error fetching questions: {e}")
     return []
+
 async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start test immediately (owner only)"""
     if update.effective_chat.type != "private" or update.effective_user.id != OWNER_ID:
@@ -118,7 +300,7 @@ async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text="📢 *Weekly Test Starting Now!*\n"
-                 "Join the Díscussion group to participate!...",
+                 "Join the Discussion group to participate!...",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
@@ -127,13 +309,13 @@ async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         weekly_test.channel_message_ids.append(channel_message.message_id)
         
         await update.message.reply_text("🚀 Starting weekly test...")
-        await send_question(context, 0)
+        await send_weekly_question(context, 0)
         
     except Exception as e:
         logger.error(f"Error starting test: {e}")
         await update.message.reply_text(f"❌ Failed to start: {str(e)}")
 
-async def send_question(context, question_index):
+async def send_weekly_question(context, question_index):
     """Send question to group and announcement to channel"""
     global weekly_test
     
@@ -179,7 +361,7 @@ async def send_question(context, question_index):
             chat_id=CHANNEL_ID,
             text=f"🎯 *QUESTION {question_index + 1} IS LIVE!* 🎯\n\n"
                  f"{time_emoji} *Hurry!* Only {QUESTION_DURATION} seconds to answer!\n"
-                 f"💡 Test your knowledge and earn poínts!\n\n",
+                 f"💡 Test your knowledge and earn points!\n\n",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("𝗘𝗡╸📝 Join Discussion", url=weekly_test.group_link)]
@@ -190,7 +372,7 @@ async def send_question(context, question_index):
         # Schedule next question or leaderboard
         if question_index + 1 < min(len(weekly_test.questions), MAX_QUESTIONS):
             context.job_queue.run_once(
-                lambda ctx: asyncio.create_task(send_question(ctx, question_index + 1)),
+                lambda ctx: asyncio.create_task(send_weekly_question(ctx, question_index + 1)),
                 QUESTION_DURATION + NEXT_QUESTION_DELAY, 
                 name="next_question"
             )
@@ -210,46 +392,6 @@ async def send_question(context, question_index):
         
     except Exception as e:
         logger.error(f"Error sending question {question_index + 1}: {e}")
-
-async def start_quiz(context):
-    """Start the weekly quiz"""
-    try:
-        # Fetch questions
-        questions = await fetch_questions_from_url()
-        if not questions:
-            logger.error("No questions available for the quiz")
-            return
-        
-        # Reset test and set questions
-        weekly_test.reset()
-        weekly_test.questions = questions
-        weekly_test.active = True
-        
-        # Get group invite link
-        chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
-        weekly_test.group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
-        
-        # Delete previous teaser message
-        await delete_channel_messages(context)
-        
-        # Send quiz start message
-        channel_message = await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text="*WEEKLY TEST STARTING NOW*\n\n"
-                 "🌟 *Get ready for an excíting knowledge challenge!*\n"
-                 "📊 Points awarded for correct answers\n",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("𝗘𝗡╸📝 Join Discussion", url=weekly_test.group_link)]
-            ])
-        )
-        weekly_test.channel_message_ids.append(channel_message.message_id)
-        
-        # Start first question
-        await send_question(context, 0)
-        
-    except Exception as e:
-        logger.error(f"Quiz start error: {e}")
 
 async def stop_poll_and_check_answers(context, question_index):
     """Handle poll closure and reveal answer"""
@@ -433,7 +575,7 @@ async def start_quiz(context):
         weekly_test.channel_message_ids.append(channel_message.message_id)
         
         # Start first question
-        await send_question(context, 0)
+        await send_weekly_question(context, 0)
         
     except Exception as e:
         logger.error(f"Quiz start error: {e}")
@@ -470,34 +612,56 @@ async def schedule_weekly_test(context):
     except Exception as e:
         logger.error(f"Error scheduling weekly test: {e}")
 
+# ==================== MAIN FUNCTION ====================
+
+def get_utc_time(hour, minute, timezone_str):
+    tz = pytz.timezone(timezone_str)
+    local_time = datetime.now(tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    utc_time = local_time.astimezone(pytz.utc).time()
+    return utc_time
+
 def main():
+    # Load initial data
+    load_questions()
+    load_leaderboard()
+
     application = Application.builder().token(BOT_TOKEN).build()
-    
-    # Command handlers
-    application.add_handler(CommandHandler("start", start_test_command))
-    application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
-    
-    # Poll answer handler
-    application.add_handler(PollAnswerHandler(handle_poll_answer))
-    
-    # Initial scheduling
-    application.job_queue.run_once(
+    job_queue = application.job_queue
+
+    # Schedule daily questions
+    job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
+    job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
+    job_queue.run_daily(send_question, get_utc_time(18, 0, "Asia/Gaza"))
+
+    # Schedule weekly quiz
+    job_queue.run_once(
         lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
         5,  # Initial delay to let the bot start
         name="initial_schedule"
     )
-    
-    # Start bot
-    if WEBHOOK_URL:
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=BOT_TOKEN,
-            webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-            drop_pending_updates=True
-        )
-    else:
-        application.run_polling(drop_pending_updates=True)
+
+    # Heartbeat check
+    job_queue.run_repeating(heartbeat, interval=60)
+
+    # Command handlers
+    application.add_handler(CommandHandler("test", test_question))
+    application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("setwebhook", set_webhook))
+    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
+
+    # Callback handlers
+    application.add_handler(CallbackQueryHandler(handle_answer))
+    application.add_handler(PollAnswerHandler(handle_poll_answer))
+
+    # Start the bot
+    port = int(os.environ.get("PORT", 5000))
+    logger.info(f"Starting bot on port {port}")
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=BOT_TOKEN,
+        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+    )
 
 if __name__ == "__main__":
     main()
