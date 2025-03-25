@@ -74,7 +74,7 @@ async def delete_channel_messages(context):
         logger.error(f"Error deleting channel messages: {e}")
 
 async def fetch_questions_from_url():
-    """Fetch and remove used questions from external JSON URL"""
+    """Fetch questions from external JSON URL"""
     try:
         if not WEEKLY_QUESTIONS_JSON_URL:
             logger.error("WEEKLY_QUESTIONS_JSON_URL not set")
@@ -83,25 +83,14 @@ async def fetch_questions_from_url():
         async with aiohttp.ClientSession() as session:
             async with session.get(WEEKLY_QUESTIONS_JSON_URL) as response:
                 if response.status == 200:
-                    data = await response.json()
-                    
-                    # Select first 10 questions
-                    selected_questions = data[:MAX_QUESTIONS]
-                    
-                    # Remove used questions
-                    remaining_questions = data[MAX_QUESTIONS:]
-                    
-                    # Update JSON with remaining questions
-                    async with session.post(
-                        WEEKLY_QUESTIONS_JSON_URL, 
-                        json=remaining_questions,
-                        headers={'Authorization': f'Bearer {API_AUTH_TOKEN}'}
-                    ) as update_response:
-                        if update_response.status != 200:
-                            logger.error("Failed to update questions")
-                    
-                    logger.info(f"Fetched {len(selected_questions)} questions")
-                    return selected_questions
+                    text_content = await response.text()
+                    try:
+                        data = json.loads(text_content)
+                        logger.info(f"Fetched {len(data)} questions")
+                        return data[:MAX_QUESTIONS]
+                    except json.JSONDecodeError as je:
+                        logger.error(f"JSON error: {je}, content: {text_content[:200]}...")
+                        return []
                 logger.error(f"Failed to fetch: HTTP {response.status}")
     except Exception as e:
         logger.error(f"Error fetching questions: {e}")
