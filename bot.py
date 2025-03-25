@@ -106,6 +106,43 @@ async def fetch_questions_from_url():
     except Exception as e:
         logger.error(f"Error fetching questions: {e}")
     return []
+async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start test immediately (owner only)"""
+    if update.effective_chat.type != "private" or update.effective_user.id != OWNER_ID:
+        return
+        
+    try:
+        questions = await fetch_questions_from_url()
+        if not questions:
+            await update.message.reply_text("❌ No questions available")
+            return
+            
+        weekly_test.reset()
+        weekly_test.questions = questions
+        weekly_test.active = True
+        
+        # Get group invite link
+        chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
+        weekly_test.group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
+        
+        # Send initial message to channel
+        channel_message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text="📢 *Weekly Test Starting Now!*\n"
+                 "Questions will appear in the discussion group shortly...",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
+            ])
+        )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
+        
+        await update.message.reply_text("🚀 Starting weekly test...")
+        await send_question(context, 0)
+        
+    except Exception as e:
+        logger.error(f"Error starting test: {e}")
+        await update.message.reply_text(f"❌ Failed to start: {str(e)}")
 
 async def send_question(context, question_index):
     """Send question to group and announcement to channel"""
@@ -388,6 +425,10 @@ def main():
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Command handlers
+    application.add_handler(CommandHandler("start", start_test_command))
+    application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
+    
+    # Poll answer handler
     application.add_handler(PollAnswerHandler(handle_poll_answer))
     
     # Initial scheduling
