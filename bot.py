@@ -179,7 +179,7 @@ async def send_question(context, question_index):
             chat_id=CHANNEL_ID,
             text=f"🎯 *QUESTION {question_index + 1} IS LIVE!* 🎯\n\n"
                  f"{time_emoji} *Hurry!* Only {QUESTION_DURATION} seconds to answer!\n"
-                 f"💡 Test your knowledge and earn pöints!\n\n",
+                 f"💡 Test your knowledge and earn poínts!\n\n",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("𝗘𝗡╸📝 Join Discussion", url=weekly_test.group_link)]
