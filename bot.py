@@ -289,6 +289,8 @@ def setup_schedules(quiz_manager, weekly_quiz_manager, job_queue):
         (next_friday - now).total_seconds()
     )
 
+# [Previous code remains the same]
+
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
@@ -298,9 +300,61 @@ def main():
     # Add handlers
     application.add_handler(CallbackQueryHandler(quiz_manager.handle_daily_answer))
     application.add_handler(PollAnswerHandler(weekly_quiz_manager.handle_weekly_poll_answer))
+    
+    # Existing commands
     application.add_handler(CommandHandler("start", lambda update, context: update.message.reply_text("Quiz Bot Ready!")))
     application.add_handler(CommandHandler("daily", lambda update, context: quiz_manager.send_daily_question(context) if update.effective_user.id == OWNER_ID else None))
     application.add_handler(CommandHandler("weekly", lambda update, context: weekly_quiz_manager.start_weekly_quiz(context) if update.effective_user.id == OWNER_ID else None))
+
+    # Restored specific commands
+    async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Display daily and weekly leaderboards"""
+        daily_leaderboard = sorted(
+            quiz_manager.daily_leaderboard.items(), 
+            key=lambda x: x[1]["score"], 
+            reverse=True
+        )
+        
+        weekly_leaderboard = sorted(
+            weekly_quiz_manager.weekly_test['participants'].items(), 
+            key=lambda x: x[1]["score"], 
+            reverse=True
+        )
+        
+        message = "🏆 Leaderboards 🏆\n\n"
+        
+        # Daily Leaderboard
+        message += "📊 Daily Leaderboard:\n"
+        for i, (_, data) in enumerate(daily_leaderboard[:10], 1):
+            message += f"{i}. {data['username']}: {data['score']} points\n"
+        
+        # Weekly Leaderboard
+        message += "\n📊 Weekly Leaderboard:\n"
+        for i, (_, data) in enumerate(weekly_leaderboard[:10], 1):
+            message += f"{i}. {data['name']}: {data['score']} points\n"
+        
+        await update.message.reply_text(message)
+
+    async def test_daily_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Manually trigger a daily question (owner only)"""
+        if update.effective_user.id == OWNER_ID:
+            await quiz_manager.send_daily_question(context)
+            await update.message.reply_text("Daily test question sent.")
+        else:
+            await update.message.reply_text("You are not authorized.")
+
+    async def test_weekly_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Manually trigger a weekly quiz (owner only)"""
+        if update.effective_user.id == OWNER_ID:
+            await weekly_quiz_manager.start_weekly_quiz(context)
+            await update.message.reply_text("Weekly test quiz initiated.")
+        else:
+            await update.message.reply_text("You are not authorized.")
+
+    # Add new command handlers
+    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
+    application.add_handler(CommandHandler("test", test_daily_question))
+    application.add_handler(CommandHandler("weeklytest", test_weekly_question))
 
     # Schedule quizzes
     setup_schedules(quiz_manager, weekly_quiz_manager, application.job_queue)
