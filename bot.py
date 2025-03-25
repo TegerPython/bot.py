@@ -1,4 +1,4 @@
-import os
+fullimport os
 import logging
 import asyncio
 import json
@@ -238,8 +238,7 @@ async def start_quiz(context):
             chat_id=CHANNEL_ID,
             text="🎮 *WEEKLY TEST STARTING NOW* 🎮\n\n"
                  "🌟 *Get ready for an exciting knowledge challenge!*\n"
-                 "📊 Points awarded for correct answers\n"
-                 "⚡ Stay sharp and focused!",
+                 "📊 Points awarded for correct answers\n",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🚀 Join Discussion", url=weekly_test.group_link)]
