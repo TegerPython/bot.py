@@ -37,7 +37,7 @@ current_question = None
 current_message_id = None
 user_answers = {}
 
-# Constants
+# Constants for Weekly Test
 QUESTION_DURATION = 30  # Default duration (seconds)
 NEXT_QUESTION_DELAY = 2  # seconds between questions
 MAX_QUESTIONS = 10  # Maximum number of questions per test
@@ -653,31 +653,57 @@ async def schedule_weekly_test(context):
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
+    job_queue = application.job_queue
+
+    job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
+    job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
+    job_queue.run_daily(send_question, get_utc_time(18, 0, "Asia/Gaza"))
+
+    friday = 4  # Monday is 0, Tuesday is 1, ..., Friday is 4
+    now = datetime.now(pytz.utc)
+    target_time = get_utc_time(18, 0, "Asia/Gaza")
+    target_datetime = datetime.combine(now.date(), target_time).replace(tzinfo=pytz.utc)
+
+    days_ahead = (friday - now.weekday() + 7) % 7
+    next_friday = now + timedelta(days=days_ahead)
+    next_friday_at_target_time = datetime.combine(next_friday.date(), target_time).replace(tzinfo=pytz.utc)
+
+    job_queue.run_daily(
+        send_weekly_questionnaire,
+        time=next_friday_at_target_time.time(),
+        days=(friday,),
+        name="weekly_questionnaire"
+    )
+
+    job_queue.run_repeating(heartbeat, interval=60)
+
+    application.add_handler(CommandHandler("test", test_question))
+    application.add_handler(CallbackQueryHandler(handle_answer))
+    application.add_handler(CommandHandler("setwebhook", set_webhook))
+    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
+    application.add_handler(CallbackQueryHandler(handle_weekly_poll_answer))
+    application.add_handler(CommandHandler("testweekly", test_weekly))
     
-    # Command handlers
+    # Weekly test handlers
     application.add_handler(CommandHandler("start", start_test_command))
     application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
-    
-    # Poll answer handler
     application.add_handler(PollAnswerHandler(handle_poll_answer))
     
-    # Initial scheduling
+    # Initial scheduling for weekly test
     application.job_queue.run_once(
         lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
         5,  # Initial delay to let the bot start
         name="initial_schedule"
     )
-    
-    # Start bot
-    if WEBHOOK_URL:
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=BOT_TOKEN,
-            webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}"
-        )
-    else:
-        application.run_polling()
+
+    port = int(os.environ.get("PORT", 5000))
+    logger.info(f"Starting bot on port {port}")
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=BOT_TOKEN,
+        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+    )
 
 if __name__ == "__main__":
     main()
