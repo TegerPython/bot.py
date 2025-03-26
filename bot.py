@@ -202,7 +202,7 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
-    await send_question(context)
+    await send_question(context, 0)  # Pass 0 as the initial question index
     await update.message.reply_text("✅ Test question sent.")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
