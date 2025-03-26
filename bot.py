@@ -202,8 +202,20 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
-    await send_question(context, 0)  # Pass 0 as the initial question index
-    await update.message.reply_text("✅ Test question sent.")
+    
+    logger.info(f"Total questions loaded: {len(questions)}")
+    logger.info(f"Channel ID: {CHANNEL_ID}")
+    
+    if not questions:
+        await update.message.reply_text("❌ No questions loaded!")
+        return
+    
+    try:
+        await send_question(context, 0)
+        await update.message.reply_text("✅ Test question sent.")
+    except Exception as e:
+        logger.error(f"Question sending error: {e}")
+        await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
