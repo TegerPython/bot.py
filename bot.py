@@ -1,4 +1,3 @@
-
 import os
 import logging
 import random
@@ -203,7 +202,7 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
-    await send_question(context, question_index=0)
+    await send_question(context)
     await update.message.reply_text("✅ Test question sent.")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
@@ -285,7 +284,7 @@ async def fetch_questions_from_url():
             
         async with aiohttp.ClientSession() as session:
             async with session.get(WEEKLY_QUESTIONS_JSON_URL) as response:
-                if response.status == 200:
+                if response.status == 200):
                     text_content = await response.text()
                     try:
                         data = json.loads(text_content)
@@ -467,6 +466,7 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         logger.error(f"Error handling poll answer: {e}")
 
+````python name=bot.py
 async def send_leaderboard_results(context):
     """Send final leaderboard results"""
     global weekly_test
@@ -727,3 +727,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+````
