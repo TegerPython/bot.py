@@ -301,6 +301,7 @@ async def fetch_questions_from_url():
 async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start test immediately (owner only)"""
     if update.effective_chat.type != "private" or update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
         return
         
     try:
@@ -310,7 +311,7 @@ async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
             
         weekly_test.reset()
-        weekly_test.questions = [q for q in questions if q["id"] not in used_weekly_questions]
+        weekly_test.questions = [q for q in questions if q.get("id") not in used_weekly_questions]
         if not weekly_test.questions:
             await update.message.reply_text("❌ No new questions available for the weekly quiz")
             return
@@ -350,7 +351,7 @@ async def send_question(context, question_index):
 
     question = weekly_test.questions[question_index]
     weekly_test.current_question_index = question_index
-    used_weekly_questions.add(question["id"])
+    used_weekly_questions.add(question.get("id", question_index))  # Use index if id is not present
     
     try:
         # Restrict messaging during quiz
@@ -386,7 +387,7 @@ async def send_question(context, question_index):
             chat_id=CHANNEL_ID,
             text=f"🎯 *QUESTION {question_index + 1} IS LIVE!* 🎯\n\n"
                  f"{time_emoji} *Hurry!* Only {QUESTION_DURATION} seconds to answer!\n"
-                 f"💡 Test your knowledge and earn poínts!\n\n",
+                 f"💡 Test your knowledge and earn points!\n\n",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("𝗘𝗡╸📝 Join Discussion", url=weekly_test.group_link)]
@@ -417,48 +418,6 @@ async def send_question(context, question_index):
         
     except Exception as e:
         logger.error(f"Error sending question {question_index + 1}: {e}")
-
-async def start_quiz(context):
-    """Start the weekly quiz"""
-    try:
-        # Fetch questions
-        questions = await fetch_questions_from_url()
-        if not questions:
-            logger.error("No questions available for the quiz")
-            return
-        
-        # Reset test and set questions
-        weekly_test.reset()
-        weekly_test.questions = [q for q in questions if q["id"] not in used_weekly_questions]
-        if not weekly_test.questions:
-            logger.error("No new questions available for the weekly quiz")
-            return
-        weekly_test.active = True
-        
-        # Get group invite link
-        chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
-        weekly_test.group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
-        
-        # Delete previous teaser message
-        await delete_channel_messages(context)
-        
-        # Send quiz start message
-        channel_message = await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text="🚀 *Quiz Starts Now!*\n"
-                 "Get ready for the weekly challenge!",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
-            ])
-        )
-        weekly_test.channel_message_ids.append(channel_message.message_id)
-        
-        # Start first question
-        await send_question(context, 0)
-        
-    except Exception as e:
-        logger.error(f"Quiz start error: {e}")
 
 async def stop_poll_and_check_answers(context, question_index):
     """Handle poll closure and reveal answer"""
@@ -624,7 +583,7 @@ async def start_quiz(context):
         
         # Reset test and set questions
         weekly_test.reset()
-        weekly_test.questions = [q for q in questions if q["id"] not in used_weekly_questions]
+        weekly_test.questions = [q for q in questions if q.get("id") not in used_weekly_questions]
         if not weekly_test.questions:
             logger.error("No new questions available for the weekly quiz")
             return
@@ -693,6 +652,8 @@ def main():
     # Command handlers
     application.add_handler(CommandHandler("start", start_test_command))
     application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("test", test_question))
+    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
     
     # Poll answer handler
     application.add_handler(PollAnswerHandler(handle_poll_answer))
