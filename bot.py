@@ -203,16 +203,26 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
     
-    logger.info(f"Total questions loaded: {len(questions)}")
-    logger.info(f"Channel ID: {CHANNEL_ID}")
-    
     if not questions:
         await update.message.reply_text("❌ No questions loaded!")
         return
     
+    # Select a random question
+    question = random.choice(questions)
+    
     try:
-        await send_question(context, 0)
-        await update.message.reply_text("✅ Test question sent.")
+        keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in question.get("options", [])]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=question.get("question"),
+            reply_markup=reply_markup,
+            disable_web_page_preview=True,
+            disable_notification=False,
+        )
+        
+        await update.message.reply_text(f"✅ Test question sent in channel. Question: {question.get('question')}")
     except Exception as e:
         logger.error(f"Question sending error: {e}")
         await update.message.reply_text(f"❌ Error: {str(e)}")
