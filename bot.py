@@ -1,6 +1,4 @@
-Here is the complete and updated `bot.py` file with the necessary fixes:
 
-````python name=bot.py
 import os
 import logging
 import random
@@ -730,4 +728,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-````
