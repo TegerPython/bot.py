@@ -10,7 +10,7 @@ import pytz
 import base64
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue, PollAnswerHandler, filters
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue, PollAnswerHandler
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -96,7 +96,7 @@ load_questions()
 load_leaderboard()
 load_weekly_questions()
 
-async def send_question(context: ContextTypes.DEFAULT_TYPE, question_index: int = 0):
+async def send_question(context: ContextTypes.DEFAULT_TYPE):
     global current_question, answered_users, current_message_id
     answered_users = set()
     current_question = random.choice(questions)
@@ -202,7 +202,7 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
-    await send_question(context, question_index=0)
+    await send_question(context)
     await update.message.reply_text("✅ Test question sent.")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
@@ -325,7 +325,7 @@ async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text="📢 *Weekly Test Starting Now!*\n"
-                 "Join the Díscussion group to participate!...",
+                 "Join the Discussion group to participate!...",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
