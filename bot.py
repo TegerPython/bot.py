@@ -467,7 +467,6 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         logger.error(f"Error handling poll answer: {e}")
 
-````python name=bot.py
 async def send_leaderboard_results(context):
     """Send final leaderboard results"""
     global weekly_test
