@@ -121,23 +121,44 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"send_question: Failed to send question: {e}")
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global answered_users, current_question, current_message_id, leaderboard
-
     query = update.callback_query
+    await query.answer()  # Important to acknowledge the callback first
+    
     user_id = query.from_user.id
     username = query.from_user.first_name
-
+    
+    # Check if this is a test question
+    is_test = query.data.startswith("test_")
+    user_answer = query.data.replace("test_", "").strip()
+    
+    if is_test:
+        # Handle test question response
+        question_text = query.message.text.replace("🧪 TEST QUESTION 🧪\n\n", "")
+        correct = any(q for q in questions 
+                     if q['question'] == question_text 
+                     and q['correct_option'].strip() == user_answer)
+        
+        if correct:
+            await query.edit_message_text(
+                text=f"🧪 TEST QUESTION 🧪\n\n{question_text}\n\n✅ Correct!",
+                reply_markup=None
+            )
+        else:
+            correct_answer = next((q['correct_option'] for q in questions 
+                                 if q['question'] == question_text), "Unknown")
+            await query.edit_message_text(
+                text=f"🧪 TEST QUESTION 🧪\n\n{question_text}\n\n❌ Incorrect!\nCorrect answer: {correct_answer}",
+                reply_markup=None
+            )
+        return
+    
+    # Rest of your existing handle_answer logic for regular questions...
     if user_id in answered_users:
         await query.answer("❌ You already answered this question.", show_alert=True)
         return
 
     answered_users.add(user_id)
-    user_answer = query.data.strip()
     correct_answer = current_question.get("correct_option", "").strip()
-
-    logger.info(f"User answer: '{user_answer}'")
-    logger.info(f"Correct answer: '{correct_answer}'")
-
     correct = user_answer == correct_answer
 
     if correct:
@@ -159,7 +180,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=CHANNEL_ID,
                 message_id=current_message_id,
                 text=edited_text,
-                reply_markup=None  # Remove the inline keyboard
+                reply_markup=None
             )
         except Exception as e:
             logger.error(f"Failed to edit message: {e}")
@@ -204,28 +225,21 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
     
-    if not questions:
-        await update.message.reply_text("❌ No questions loaded!")
-        return
-    
-    # Select a random question
-    question = random.choice(questions)
-    
     try:
-        keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in question.get("options", [])]
+        # Send to private chat instead of channel for testing
+        question = random.choice(questions)
+        keyboard = [[InlineKeyboardButton(option, callback_data=f"test_{option}")] 
+                   for option in question.get("options", [])]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        message = await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=question.get("question"),
-            reply_markup=reply_markup,
-            disable_web_page_preview=True,
-            disable_notification=False,
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"🧪 TEST QUESTION 🧪\n\n{question['question']}",
+            reply_markup=reply_markup
         )
-        
-        await update.message.reply_text(f"✅ Test question sent in channel. Question: {question.get('question')}")
+        await update.message.reply_text("✅ Test question sent to this chat.")
     except Exception as e:
-        logger.error(f"Question sending error: {e}")
+        logger.error(f"Error in test_question: {e}")
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
