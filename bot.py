@@ -716,6 +716,7 @@ def main():
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Command handlers
+    application.add_handler(CallbackQueryHandler(handle_answer))
     application.add_handler(CommandHandler("start", start_test_command))
     application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("test", test_question))
