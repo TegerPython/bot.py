@@ -124,6 +124,11 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global answered_users, current_question, current_message_id, leaderboard
 
     query = update.callback_query
+    await query.answer()  # Always answer the callback query
+
+    if not query or not current_question:
+        return
+
     user_id = query.from_user.id
     username = query.from_user.first_name
 
@@ -141,7 +146,6 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     correct = user_answer == correct_answer
 
     if correct:
-        await query.answer("✅ Correct!")
         if str(user_id) not in leaderboard:
             leaderboard[str(user_id)] = {"username": username, "score": 0}
         leaderboard[str(user_id)]["score"] += 1
@@ -163,8 +167,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except Exception as e:
             logger.error(f"Failed to edit message: {e}")
-    else:
-        await query.answer("❌ Incorrect.", show_alert=True)
+    
     save_leaderboard()
 
 def save_leaderboard():
@@ -720,6 +723,7 @@ def main():
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Command handlers
+    application.add_handler(CallbackQueryHandler(handle_answer))
     application.add_handler(CommandHandler("start", start_test_command))
     application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("test", test_question))
