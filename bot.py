@@ -121,48 +121,31 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"send_question: Failed to send question: {e}")
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global answered_users, current_question, current_message_id, leaderboard
+
     query = update.callback_query
-    await query.answer()  # Important to acknowledge the callback first
-    
+    await query.answer()  # Always answer the callback query
+
+    if not query or not current_question:
+        return
+
     user_id = query.from_user.id
     username = query.from_user.first_name
-    
-    # Check if this is a test question
-    is_test = query.data.startswith("test_")
-    user_answer = query.data.replace("test_", "").strip()
-    
-    if is_test:
-        # Handle test question response
-        question_text = query.message.text.replace("🧪 TEST QUESTION 🧪\n\n", "")
-        correct = any(q for q in questions 
-                     if q['question'] == question_text 
-                     and q['correct_option'].strip() == user_answer)
-        
-        if correct:
-            await query.edit_message_text(
-                text=f"🧪 TEST QUESTION 🧪\n\n{question_text}\n\n✅ Correct!",
-                reply_markup=None
-            )
-        else:
-            correct_answer = next((q['correct_option'] for q in questions 
-                                 if q['question'] == question_text), "Unknown")
-            await query.edit_message_text(
-                text=f"🧪 TEST QUESTION 🧪\n\n{question_text}\n\n❌ Incorrect!\nCorrect answer: {correct_answer}",
-                reply_markup=None
-            )
-        return
-    
-    # Rest of your existing handle_answer logic for regular questions...
+
     if user_id in answered_users:
         await query.answer("❌ You already answered this question.", show_alert=True)
         return
 
     answered_users.add(user_id)
+    user_answer = query.data.strip()
     correct_answer = current_question.get("correct_option", "").strip()
+
+    logger.info(f"User answer: '{user_answer}'")
+    logger.info(f"Correct answer: '{correct_answer}'")
+
     correct = user_answer == correct_answer
 
     if correct:
-        await query.answer("✅ Correct!")
         if str(user_id) not in leaderboard:
             leaderboard[str(user_id)] = {"username": username, "score": 0}
         leaderboard[str(user_id)]["score"] += 1
@@ -180,12 +163,11 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=CHANNEL_ID,
                 message_id=current_message_id,
                 text=edited_text,
-                reply_markup=None
+                reply_markup=None  # Remove the inline keyboard
             )
         except Exception as e:
             logger.error(f"Failed to edit message: {e}")
-    else:
-        await query.answer("❌ Incorrect.", show_alert=True)
+    
     save_leaderboard()
 
 def save_leaderboard():
