@@ -202,8 +202,30 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
-    await send_question(context)
-    await update.message.reply_text("✅ Test question sent.")
+    
+    if not questions:
+        await update.message.reply_text("❌ No questions loaded!")
+        return
+    
+    # Select a random question
+    question = random.choice(questions)
+    
+    try:
+        keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in question.get("options", [])]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=question.get("question"),
+            reply_markup=reply_markup,
+            disable_web_page_preview=True,
+            disable_notification=False,
+        )
+        
+        await update.message.reply_text(f"✅ Test question sent in channel. Question: {question.get('question')}")
+    except Exception as e:
+        logger.error(f"Question sending error: {e}")
+        await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
