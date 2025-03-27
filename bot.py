@@ -128,7 +128,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = query.from_user.first_name
 
     if user_id in answered_users:
-        await query.answer("❌ You already answered this question.")
+        await query.answer("❌ You already answered this question.", show_alert=True)
         return
 
     answered_users.add(user_id)
@@ -158,12 +158,13 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.edit_message_text(
                 chat_id=CHANNEL_ID,
                 message_id=current_message_id,
-                text=edited_text
+                text=edited_text,
+                reply_markup=None  # Remove the inline keyboard
             )
         except Exception as e:
             logger.error(f"Failed to edit message: {e}")
     else:
-        await query.answer("❌ Incorrect.")
+        await query.answer("❌ Incorrect.", show_alert=True)
     save_leaderboard()
 
 def save_leaderboard():
