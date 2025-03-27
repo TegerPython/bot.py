@@ -124,11 +124,6 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global answered_users, current_question, current_message_id, leaderboard
 
     query = update.callback_query
-    await query.answer()  # Always answer the callback query
-
-    if not query or not current_question:
-        return
-
     user_id = query.from_user.id
     username = query.from_user.first_name
 
@@ -146,6 +141,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     correct = user_answer == correct_answer
 
     if correct:
+        await query.answer("✅ Correct!")
         if str(user_id) not in leaderboard:
             leaderboard[str(user_id)] = {"username": username, "score": 0}
         leaderboard[str(user_id)]["score"] += 1
@@ -167,7 +163,8 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except Exception as e:
             logger.error(f"Failed to edit message: {e}")
-    
+    else:
+        await query.answer("❌ Incorrect.", show_alert=True)
     save_leaderboard()
 
 def save_leaderboard():
@@ -207,21 +204,28 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
     
+    if not questions:
+        await update.message.reply_text("❌ No questions loaded!")
+        return
+    
+    # Select a random question
+    question = random.choice(questions)
+    
     try:
-        # Send to private chat instead of channel for testing
-        question = random.choice(questions)
-        keyboard = [[InlineKeyboardButton(option, callback_data=f"test_{option}")] 
-                   for option in question.get("options", [])]
+        keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in question.get("options", [])]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"🧪 TEST QUESTION 🧪\n\n{question['question']}",
-            reply_markup=reply_markup
+        message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=question.get("question"),
+            reply_markup=reply_markup,
+            disable_web_page_preview=True,
+            disable_notification=False,
         )
-        await update.message.reply_text("✅ Test question sent to this chat.")
+        
+        await update.message.reply_text(f"✅ Test question sent in channel. Question: {question.get('question')}")
     except Exception as e:
-        logger.error(f"Error in test_question: {e}")
+        logger.error(f"Question sending error: {e}")
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
@@ -716,7 +720,6 @@ def main():
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Command handlers
-    application.add_handler(CallbackQueryHandler(handle_answer))
     application.add_handler(CommandHandler("start", start_test_command))
     application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("test", test_question))
