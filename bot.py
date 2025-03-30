@@ -324,6 +324,33 @@ async def fetch_questions_from_url():
         logger.error(f"Error fetching questions: {e}")
     return []
 
+async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show personal progress"""
+    user_id = str(update.effective_user.id)
+    
+    if user_id not in leaderboard:
+        await update.message.reply_text("❌ You have no recorded progress yet.")
+        return
+    
+    user_stats = leaderboard[user_id]
+    stats_message = (
+        f"📊 *Your Stats*\n\n"
+        f"Username: {user_stats['username']}\n"
+        f"Score: {user_stats['score']} points"
+    )
+    await update.message.reply_text(stats_message, parse_mode="Markdown")
+
+async def reset_leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Clear all scores (Owner only)"""
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    
+    global leaderboard
+    leaderboard = {}
+    save_leaderboard()
+    await update.message.reply_text("✅ Leaderboard has been reset.")
+
 async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start test immediately (owner only)"""
     if update.effective_chat.type != "private" or update.effective_user.id != OWNER_ID:
@@ -728,6 +755,8 @@ def main():
     application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("test", test_question))
     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
+        application.add_handler(CommandHandler("mystats", mystats_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("resetleaderboard", reset_leaderboard_command, filters=filters.ChatType.PRIVATE))
     
     # Poll answer handler
     application.add_handler(PollAnswerHandler(handle_poll_answer))
