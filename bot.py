@@ -140,17 +140,17 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     correct = user_answer == correct_answer
 
+    if str(user_id) not in leaderboard:
+        leaderboard[str(user_id)] = {"username": username, "score": 0, "total_answered": 0, "total_correct": 0}
+
+    leaderboard[str(user_id)]["total_answered"] += 1
+
     if correct:
         await query.answer("✅ Correct!")
-        if str(user_id) not in leaderboard:
-            leaderboard[str(user_id)] = {"username": username, "score": 0, "total_answered": 0, "total_correct": 0}
         leaderboard[str(user_id)]["score"] += 1
         leaderboard[str(user_id)]["total_correct"] += 1
     else:
         await query.answer("❌ Incorrect.", show_alert=True)
-
-    if str(user_id) in leaderboard:
-        leaderboard[str(user_id)]["total_answered"] += 1
 
     explanation = current_question.get("explanation", "No explanation provided.")
     edited_text = (
@@ -770,7 +770,7 @@ def main():
     application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("test", test_question))
     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
-        application.add_handler(CommandHandler("mystats", mystats_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("mystats", mystats_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("resetleaderboard", reset_leaderboard_command, filters=filters.ChatType.PRIVATE))
     
     # Poll answer handler
