@@ -336,9 +336,22 @@ async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stats_message = (
         f"📊 *Your Stats*\n\n"
         f"Username: {user_stats['username']}\n"
-        f"Score: {user_stats['score']} points"
+        f"Score: {user_stats['score']} points\n"
+        f"Total Questions Answered: {user_stats.get('total_answered', 0)}\n"
+        f"Total Correct Answers: {user_stats.get('total_correct', 0)}"
     )
     await update.message.reply_text(stats_message, parse_mode="Markdown")
+
+async def reset_leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Clear all scores (Owner only)"""
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    
+    global leaderboard
+    leaderboard = {}
+    save_leaderboard()
+    await update.message.reply_text("✅ Leaderboard has been reset.")
 
 async def reset_leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Clear all scores (Owner only)"""
