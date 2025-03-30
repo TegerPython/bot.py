@@ -124,11 +124,6 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global answered_users, current_question, current_message_id, leaderboard
 
     query = update.callback_query
-    await query.answer()  # Always answer the callback query
-
-    if not query or not current_question:
-        return
-
     user_id = query.from_user.id
     username = query.from_user.first_name
 
@@ -146,28 +141,35 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     correct = user_answer == correct_answer
 
     if correct:
+        await query.answer("✅ Correct!")
         if str(user_id) not in leaderboard:
-            leaderboard[str(user_id)] = {"username": username, "score": 0}
+            leaderboard[str(user_id)] = {"username": username, "score": 0, "total_answered": 0, "total_correct": 0}
         leaderboard[str(user_id)]["score"] += 1
+        leaderboard[str(user_id)]["total_correct"] += 1
+    else:
+        await query.answer("❌ Incorrect.", show_alert=True)
 
-        explanation = current_question.get("explanation", "No explanation provided.")
-        edited_text = (
-            "📝 Daily Challenge (Answered)\n\n"
-            f"Question: {current_question.get('question')}\n"
-            f"✅ Correct Answer: {current_question.get('correct_option')}\n"
-            f"ℹ️ Explanation: {explanation}\n\n"
-            f"🏆 Winner: {username}"
+    if str(user_id) in leaderboard:
+        leaderboard[str(user_id)]["total_answered"] += 1
+
+    explanation = current_question.get("explanation", "No explanation provided.")
+    edited_text = (
+        "📝 Daily Challenge (Answered)\n\n"
+        f"Question: {current_question.get('question')}\n"
+        f"✅ Correct Answer: {current_question.get('correct_option')}\n"
+        f"ℹ️ Explanation: {explanation}\n\n"
+        f"🏆 Winner: {username}"
+    )
+    try:
+        await context.bot.edit_message_text(
+            chat_id=CHANNEL_ID,
+            message_id=current_message_id,
+            text=edited_text,
+            reply_markup=None  # Remove the inline keyboard
         )
-        try:
-            await context.bot.edit_message_text(
-                chat_id=CHANNEL_ID,
-                message_id=current_message_id,
-                text=edited_text,
-                reply_markup=None  # Remove the inline keyboard
-            )
-        except Exception as e:
-            logger.error(f"Failed to edit message: {e}")
-    
+    except Exception as e:
+        logger.error(f"Failed to edit message: {e}")
+
     save_leaderboard()
 
 def save_leaderboard():
