@@ -96,29 +96,84 @@ load_questions()
 load_leaderboard()
 load_weekly_questions()
 
-async def send_question(context: ContextTypes.DEFAULT_TYPE):
-    global current_question, answered_users, current_message_id
-    answered_users = set()
-    current_question = random.choice(questions)
-    keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in current_question.get("options", [])]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+async def send_question(context, question_index):
+    """Send question to group and announcement to channel"""
+    global weekly_test, used_weekly_questions
+    
+    if not weekly_test.active or question_index >= len(weekly_test.questions):
+        if weekly_test.active:
+            await send_leaderboard_results(context)
+        return
 
+    question = weekly_test.questions[question_index]
+    weekly_test.current_question_index = question_index
+    used_weekly_questions.add(question.get("id", question_index))  # Use index if id is not present
+    
     try:
-        message = await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=current_question.get("question"),
-            reply_markup=reply_markup,
-            disable_web_page_preview=True,
-            disable_notification=False,
+        # Restrict messaging during quiz
+        await context.bot.set_chat_permissions(
+            DISCUSSION_GROUP_ID,
+            permissions={"can_send_messages": False}
         )
-        if message and message.message_id:
-            current_message_id = message.message_id
-            logger.info("send_question: message sent successfully")
+        
+        # Send poll to group
+        group_message = await context.bot.send_poll(
+            chat_id=DISCUSSION_GROUP_ID,
+            question=f"❓ Question {question_index + 1}: {question['question']}",
+            options=question["options"],
+            is_anonymous=False,
+            protect_content=True,
+            allows_multiple_answers=False,
+            open_period=QUESTION_DURATION
+        )
+        
+        # Store poll info
+        weekly_test.poll_ids[question_index] = group_message.poll.id
+        weekly_test.poll_messages[question_index] = group_message.message_id
+        
+        # Prepare channel message with dynamic timing
+        time_emoji = "⏱️"
+        if QUESTION_DURATION <= 10:
+            time_emoji = "🚨"
+        elif QUESTION_DURATION <= 20:
+            time_emoji = "⏳"
+        
+        # Send channel announcement
+        channel_message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=f"🎯 *QUESTION {question_index + 1} IS LIVE!* 🎯\n\n"
+                 f"{time_emoji} *Hurry!* Only {QUESTION_DURATION} seconds to answer!\n"
+                 f"💡 Test your knowledge and earn points!\n\n",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("𝗘𝗡╸📝 Join Discussion", url=weekly_test.group_link)]
+            ])
+        )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
+        
+        # Schedule next question or leaderboard
+        if question_index + 1 < min(len(weekly_test.questions), MAX_QUESTIONS):
+            context.job_queue.run_once(
+                lambda ctx: asyncio.create_task(send_question(ctx, question_index + 1)),
+                QUESTION_DURATION + NEXT_QUESTION_DELAY, 
+                name="next_question"
+            )
         else:
-            logger.info("send_question: message sending failed")
-
+            context.job_queue.run_once(
+                lambda ctx: asyncio.create_task(send_leaderboard_results(ctx)),
+                QUESTION_DURATION + 5, 
+                name="send_leaderboard"
+            )
+        
+        # Schedule poll closure and answer reveal
+        context.job_queue.run_once(
+            lambda ctx: asyncio.create_task(stop_poll_and_check_answers(ctx, question_index)),
+            QUESTION_DURATION, 
+            name=f"stop_poll_{question_index}"
+        )
+        
     except Exception as e:
-        logger.error(f"send_question: Failed to send question: {e}")
+        logger.error(f"Error sending question {question_index + 1}: {e}")
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global answered_users, current_question, current_message_id, leaderboard
