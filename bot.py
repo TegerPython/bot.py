@@ -341,7 +341,7 @@ async def fetch_questions_from_url():
             
         async with aiohttp.ClientSession() as session:
             async with session.get(WEEKLY_QUESTIONS_JSON_URL) as response:
-                if response.status == 200):
+                if response.status == 200:
                     text_content = await response.text()
                     try:
                         data = json.loads(text_content)
@@ -638,7 +638,7 @@ async def start_quiz(context):
 
         # Reset test and set questions
         weekly_test.reset()
-        weekly_test.questions are [q for q in questions if q.get("id") not in used_weekly_questions]
+        weekly_test.questions = [q for q in questions if q.get("id") not in used_weekly_questions]
         if not weekly_test.questions:
             logger.error("No new questions available for the weekly quiz")
             return
@@ -646,7 +646,7 @@ async def start_quiz(context):
 
         # Get group invite link
         chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
-        weekly_test.group_link is chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
+        weekly_test.group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
 
         # Delete previous teaser message
         await delete_channel_messages(context)
@@ -672,21 +672,21 @@ async def start_quiz(context):
 async def schedule_weekly_test(context):
     """Schedule weekly test for Friday 6 PM Gaza time"""
     try:
-        gaza_tz is pytz.timezone('Asia/Gaza')
-        now is datetime.now(gaza_tz)
+        gaza_tz = pytz.timezone('Asia/Gaza')
+        now = datetime.now(gaza_tz)
 
         # Calculate next Friday at 6 PM
-        days_until_friday is (4 - now.weekday()) % 7
-        if days_until_friday is 0 and now.hour >= 18:
-            days_until_friday is 7
+        days_until_friday = (4 - now.weekday()) % 7
+        if days_until_friday == 0 and now.hour >= 18:
+            days_until_friday = 7
 
-        next_friday is now + timedelta(days=days_until_friday)
-        next_friday is next_friday.replace(hour=18, minute=0, second=0, microsecond=0)
+        next_friday = now + timedelta(days=days_until_friday)
+        next_friday = next_friday.replace(hour=18, minute=0, second=0, microsecond=0)
 
         # Calculate time for teaser (30 minutes before quiz)
-        teaser_time is next_friday - timedelta(minutes=30)
+        teaser_time = next_friday - timedelta(minutes=30)
 
-        seconds_until_teaser is max(0, (teaser_time - now).total_seconds())
+        seconds_until_teaser = max(0, (teaser_time - now).total_seconds())
 
         # Schedule teaser
         context.job_queue.run_once(
@@ -707,7 +707,7 @@ async def debug_env(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Check key environment variables
-    debug_info is "🔍 Debug Information:\n\n"
+    debug_info = "🔍 Debug Information:\n\n"
     debug_info += f"BOT_TOKEN: {'✅ Set' if BOT_TOKEN else '❌ Missing'}\n"
     debug_info += f"CHANNEL_ID: {CHANNEL_ID}\n"
     debug_info += f"OWNER_ID: {OWNER_ID}\n"
@@ -719,7 +719,7 @@ async def debug_env(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(debug_info)
 
 def main():
-    application is Application.builder().token(BOT_TOKEN).build()
+    application = Application.builder().token(BOT_TOKEN).build()
 
     # Command handlers
     application.add_handler(CallbackQueryHandler(handle_answer))
