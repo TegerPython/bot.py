@@ -13,7 +13,10 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue, PollAnswerHandler, filters
 
 # Logging setup
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
 # Environment Variables
@@ -31,12 +34,14 @@ PORT = int(os.getenv("PORT", "5000"))
 QUESTION_DURATION = 30  # Default duration (seconds)
 NEXT_QUESTION_DELAY = 2  # seconds between questions
 MAX_QUESTIONS = 10  # Maximum number of questions per test
+QUESTION_EXPIRY_TIME = 3600  # 1 hour in seconds
 
 # Global variables
 questions = []
 leaderboard = {}
 current_question = None
 current_message_id = None
+question_expiry = None
 user_answers = {}
 weekly_questions = []
 weekly_question_index = 0
@@ -53,7 +58,6 @@ def load_questions():
         response.raise_for_status()
         questions = response.json()
         logger.info(f"Loaded {len(questions)} questions from {QUESTIONS_JSON_URL}")
-        logger.debug(f"Loaded questions: {questions}")
     except requests.exceptions.RequestException as e:
         logger.error(f"Error fetching questions from {QUESTIONS_JSON_URL}: {e}")
     except json.JSONDecodeError:
@@ -69,7 +73,6 @@ def load_leaderboard():
         response.raise_for_status()
         leaderboard = response.json()
         logger.info(f"Loaded leaderboard from {LEADERBOARD_JSON_URL}")
-        logger.debug(f"Loaded leaderboard: {leaderboard}")
     except requests.exceptions.RequestException as e:
         logger.error(f"Error fetching leaderboard from {LEADERBOARD_JSON_URL}: {e}")
     except json.JSONDecodeError:
@@ -85,7 +88,6 @@ def load_weekly_questions():
         response.raise_for_status()
         weekly_questions = response.json()
         logger.info(f"Loaded {len(weekly_questions)} weekly questions from {WEEKLY_QUESTIONS_JSON_URL}")
-        logger.debug(f"loaded weekly questions: {weekly_questions}")
     except requests.exceptions.RequestException as e:
         logger.error(f"Error fetching weekly questions from {WEEKLY_QUESTIONS_JSON_URL}: {e}")
     except json.JSONDecodeError:
@@ -97,9 +99,36 @@ load_questions()
 load_leaderboard()
 load_weekly_questions()
 
-async def send_question(context: ContextTypes.DEFAULT_TYPE):
-    global current_question, answered_users, current_message_id
+async def cleanup_question(context: ContextTypes.DEFAULT_TYPE):
+    global current_question, current_message_id, answered_users, question_expiry
+    
+    if current_question and current_message_id:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=CHANNEL_ID,
+                message_id=current_message_id,
+                text="⌛ This question has expired",
+                reply_markup=None
+            )
+        except Exception as e:
+            logger.error(f"cleanup_question: Failed to edit message: {e}")
+    
+    current_question = None
+    current_message_id = None
     answered_users = set()
+    question_expiry = None
+    logger.info("Cleaned up expired question")
+
+async def send_question(context: ContextTypes.DEFAULT_TYPE):
+    global current_question, answered_users, current_message_id, question_expiry
+    
+    # Clean up any existing question
+    await cleanup_question(context)
+    
+    if not questions:
+        logger.error("No questions available to send")
+        return
+
     current_question = random.choice(questions)
     keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in current_question.get("options", [])]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -112,70 +141,115 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
             disable_web_page_preview=True,
             disable_notification=False,
         )
+        
         if message and message.message_id:
             current_message_id = message.message_id
-            logger.info("send_question: message sent successfully")
-            logger.debug(f"send_question: current_question: {current_question}")
+            question_expiry = time.time() + QUESTION_EXPIRY_TIME
+            logger.info(f"Question sent with ID {current_message_id}, expires at {question_expiry}")
         else:
-            logger.info("send_question: message sending failed")
+            logger.error("Failed to get message ID after sending")
+            current_question = None
 
     except Exception as e:
         logger.error(f"send_question: Failed to send question: {e}")
+        current_question = None
+        current_message_id = None
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.debug("handle_answer: function called")
-    global answered_users, current_question, current_message_id, leaderboard
+    global answered_users, current_question, current_message_id, leaderboard, question_expiry
+
+    # Early validation
+    if not update.callback_query:
+        logger.warning("handle_answer: No callback query in update")
+        return
 
     query = update.callback_query
     await query.answer()
 
-    if not query or not current_question:
-        logger.warning("handle_answer: query or current_question is None")
-        logger.debug(f"handle_answer: query: {query}, current_question: {current_question}")
+    # Check if question is still valid
+    if not current_question or not current_message_id:
+        logger.warning("handle_answer: No active question")
+        try:
+            await query.answer("⚠️ This question is no longer active", show_alert=True)
+        except Exception as e:
+            logger.error(f"Failed to send answer feedback: {e}")
+        return
+
+    if question_expiry and time.time() > question_expiry:
+        logger.warning("handle_answer: Question has expired")
+        await cleanup_question(context)
+        try:
+            await query.answer("⌛ This question has expired", show_alert=True)
+        except Exception as e:
+            logger.error(f"Failed to send expiry feedback: {e}")
         return
 
     user_id = query.from_user.id
-    username = query.from_user.first_name
+    username = query.from_user.first_name or query.from_user.username or f"User {user_id}"
 
+    # Check if user already answered
     if user_id in answered_users:
-        await query.answer("❌ You already answered this question.", show_alert=True)
+        try:
+            await query.answer("❌ You already answered this question.", show_alert=True)
+        except Exception as e:
+            logger.error(f"Failed to send duplicate answer feedback: {e}")
         return
 
+    # Mark user as answered
     answered_users.add(user_id)
-    user_answer = query.data.strip()
-    correct_answer = current_question.get("correct_option", "").strip()
+    
+    try:
+        user_answer = query.data.strip()
+        correct_answer = current_question.get("correct_option", "").strip()
 
-    logger.info(f"handle_answer: User answer: '{user_answer}'")
-    logger.info(f"handle_answer: Correct answer: '{correct_answer}'")
-    logger.info(f"handle_answer: user_id: '{user_id}'")
+        logger.info(f"handle_answer: User {username} (ID: {user_id}) answered: '{user_answer}'")
+        logger.info(f"handle_answer: Correct answer: '{correct_answer}'")
 
-    correct = user_answer == correct_answer
+        correct = user_answer == correct_answer
 
-    if correct:
-        if str(user_id) not in leaderboard:
-            leaderboard[str(user_id)] = {"username": username, "score": 0}
-        leaderboard[str(user_id)]["score"] += 1
+        if correct:
+            # Update leaderboard
+            if str(user_id) not in leaderboard:
+                leaderboard[str(user_id)] = {"username": username, "score": 0}
+            leaderboard[str(user_id)]["score"] += 1
 
-        explanation = current_question.get("explanation", "No explanation provided.")
-        edited_text = (
-            "📝 Daily Challenge (Answered)\n\n"
-            f"Question: {current_question.get('question')}\n"
-            f"✅ Correct Answer: {current_question.get('correct_option')}\n"
-            f"ℹ️ Explanation: {explanation}\n\n"
-            f"🏆 Winner: {username}"
-        )
-        try:
-            await context.bot.edit_message_text(
-                chat_id=CHANNEL_ID,
-                message_id=current_message_id,
-                text=edited_text,
-                reply_markup=None
+            explanation = current_question.get("explanation", "No explanation provided.")
+            edited_text = (
+                "📝 Daily Challenge (Answered)\n\n"
+                f"Question: {current_question.get('question')}\n"
+                f"✅ Correct Answer: {current_question.get('correct_option')}\n"
+                f"ℹ️ Explanation: {explanation}\n\n"
+                f"🏆 Winner: {username}"
             )
-            logger.info("handle_answer: message edited successfully")
-        except Exception as e:
-            logger.error(f"handle_answer: Failed to edit message: {e}")
+            
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=CHANNEL_ID,
+                    message_id=current_message_id,
+                    text=edited_text,
+                    reply_markup=None
+                )
+                logger.info("handle_answer: message edited successfully")
+            except Exception as e:
+                logger.error(f"handle_answer: Failed to edit message: {e}")
+            
+            # Save the updated leaderboard
+            save_leaderboard()
+            
+        else:
+            # Provide feedback for incorrect answers
+            try:
+                await query.answer("❌ Incorrect answer!", show_alert=False)
+            except Exception as e:
+                logger.error(f"Failed to send incorrect answer feedback: {e}")
 
-    save_leaderboard()
+    except Exception as e:
+        logger.error(f"Error in handle_answer processing: {e}")
+        try:
+            await query.answer("⚠️ Error processing your answer", show_alert=False)
+        except Exception as e:
+            logger.error(f"Failed to send error feedback: {e}")
 
 def save_leaderboard():
     try:
@@ -204,7 +278,6 @@ def save_leaderboard():
         update_response.raise_for_status()
 
         logger.info("Leaderboard saved successfully to GitHub.")
-        logger.debug(f"saved leaderboard: {leaderboard}")
     except Exception as e:
         logger.error(f"Error saving leaderboard to GitHub: {e}")
 
@@ -249,7 +322,6 @@ async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
-        logger.info(f"Leaderboard data: {leaderboard}")
         sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
         leaderboard_text = "🏆 Leaderboard 🏆\n\n"
         for rank, (user_id, player) in enumerate(sorted_leaderboard, start=1):
@@ -648,6 +720,13 @@ def main():
     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
 
     application.add_handler(PollAnswerHandler(handle_poll_answer))
+
+    # Schedule regular cleanup
+    application.job_queue.run_repeating(
+        cleanup_question,
+        interval=3600,  # Every hour
+        first=10  # Start after 10 seconds
+    )
 
     application.job_queue.run_once(
         lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
