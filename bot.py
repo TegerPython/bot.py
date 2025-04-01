@@ -512,7 +512,8 @@ async def create_countdown_teaser(context):
         )
         weekly_test.channel_message_ids.append(message.message_id)
 
- async def debug_env(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Make sure this is at the same indentation level as your other functions
+async def debug_env(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
@@ -528,8 +529,7 @@ async def create_countdown_teaser(context):
     debug_info += f"Current question: {'✅ Set' if current_question else '❌ None'}\n"
     
     await update.message.reply_text(debug_info)
-
-
+    
 async def force_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global current_question, current_message_id, answered_users
     
