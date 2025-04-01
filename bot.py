@@ -115,6 +115,8 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
+        # Log before sending the message
+        logger.info("Attempting to send question message to the channel.")
         message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text=current_question.get("question"),
@@ -132,6 +134,9 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global answered_users, current_question, current_message_id, leaderboard
+
+    # Log when handle_answer is called
+    logger.info("handle_answer: Called.")
 
     if not current_question:
         logger.error("handle_answer: No current question available.")
