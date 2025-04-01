@@ -137,7 +137,7 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
     try:
         current_question = random.choice(questions)
         keyboard = [
-            [InlineKeyboardButton(option, callback_data=option)] 
+            [InlineKeyboardButton(option, callback_data=option)]
             for option in current_question.get("options", [])
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -280,6 +280,42 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Failed to send error feedback: {e}")
 
 # [Rest of the code remains the same...]
+async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    #Your start test command logic here.
+    try:
+        questions = await fetch_questions_from_url()
+        if not questions:
+            await update.message.reply_text("❌ No questions available")
+            return
+
+        weekly_test.reset()
+        weekly_test.questions = [q for q in questions if q.get("id") not in used_weekly_questions]
+        if not weekly_test.questions:
+            await update.message.reply_text("❌ No new questions available for the weekly quiz")
+            return
+        weekly_test.active = True
+
+        chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
+        weekly_test.group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
+
+        channel_message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text="📢 *Weekly Test Starting Now!*\n"
+                 "Join the Discussion group to participate!...",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
+            ])
+        )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
+
+        await update.message.reply_text("🚀 Starting weekly test...")
+        await send_question(context, 0)
+
+    except Exception as e:
+        logger.error(f"Error starting test: {e}")
+        await update.message.reply_text(f"❌ Failed to start: {str(e)}")
+#the rest of the code.
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
