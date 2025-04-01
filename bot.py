@@ -108,6 +108,8 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
         logger.error("Failed to select a question.")
         return
 
+    logger.info(f"Selected question: {current_question}")
+
     keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in current_question.get("options", [])]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -134,6 +136,8 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error("handle_answer: No current question available.")
         await update.callback_query.answer("❌ No current question available.", show_alert=True)
         return
+
+    logger.info(f"Handling answer for question: {current_question}")
 
     query = update.callback_query
     user_id = query.from_user.id
