@@ -99,7 +99,15 @@ load_weekly_questions()
 async def send_question(context: ContextTypes.DEFAULT_TYPE):
     global current_question, answered_users, current_message_id
     answered_users = set()
+    if not questions:
+        logger.error("No questions available to send.")
+        return
+
     current_question = random.choice(questions)
+    if not current_question:
+        logger.error("Failed to select a question.")
+        return
+
     keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in current_question.get("options", [])]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -116,12 +124,16 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
             logger.info("send_question: message sent successfully")
         else:
             logger.info("send_question: message sending failed")
-
     except Exception as e:
         logger.error(f"send_question: Failed to send question: {e}")
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global answered_users, current_question, current_message_id, leaderboard
+
+    if not current_question:
+        logger.error("handle_answer: No current question available.")
+        await update.callback_query.answer("❌ No current question available.", show_alert=True)
+        return
 
     query = update.callback_query
     user_id = query.from_user.id
