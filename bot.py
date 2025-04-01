@@ -738,7 +738,7 @@ def main():
         5,  # Initial delay to let the bot start
         name="initial_schedule"
     )
-    a
+    
     # Start bot
     if WEBHOOK_URL:
         application.run_webhook(
