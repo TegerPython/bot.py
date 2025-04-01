@@ -728,22 +728,17 @@ def main():
     application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("test", test_question))
     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
-    application.add_handler(CommandHandler("mystats", mystats_command, filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("resetleaderboard", reset_leaderboard_command, filters=filters.ChatType.PRIVATE))
     
     # Poll answer handler
     application.add_handler(PollAnswerHandler(handle_poll_answer))
     
-    # Error handler
-    application.add_error_handler(TypeHandler(Exception, error_handler))
-
     # Initial scheduling
     application.job_queue.run_once(
         lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
         5,  # Initial delay to let the bot start
         name="initial_schedule"
     )
-    
+    a
     # Start bot
     if WEBHOOK_URL:
         application.run_webhook(
