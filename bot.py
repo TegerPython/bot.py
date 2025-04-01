@@ -10,7 +10,7 @@ import pytz
 import base64
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue, PollAnswerHandler, filters
+from telegram.ext import Application, CommandHandler, TypeHandler, CallbackQueryHandler, ContextTypes, JobQueue, PollAnswerHandler, filters
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -773,6 +773,10 @@ async def schedule_weekly_test(context):
     except Exception as e:
         logger.error(f"Error scheduling weekly test: {e}")
 
+
+async def error_handler(update, context):
+    logger.error(msg="Exception while handling an update:", exc_info=context.error)
+
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     
@@ -788,12 +792,30 @@ def main():
     # Poll answer handler
     application.add_handler(PollAnswerHandler(handle_poll_answer))
     
+    # Error handler
+    application.add_error_handler(TypeHandler(Exception, error_handler))
+
     # Initial scheduling
     application.job_queue.run_once(
         lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
         5,  # Initial delay to let the bot start
         name="initial_schedule"
     )
+    
+    # Start bot
+    if WEBHOOK_URL:
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=BOT_TOKEN,
+            webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+            drop_pending_updates=True
+        )
+    else:
+        application.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()   )
     
     # Start bot
     if WEBHOOK_URL:
