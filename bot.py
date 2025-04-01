@@ -108,6 +108,9 @@ load_weekly_questions()
 async def send_question(context: ContextTypes.DEFAULT_TYPE):
     global current_question, answered_users, current_message_id
     answered_users = set()
+    if not questions:
+        logger.error("send_question: No questions available")
+        return
     current_question = random.choice(questions)
     keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in current_question.get("options", [])]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -468,7 +471,7 @@ async def send_weekly_question(context, question_index):
 async def stop_poll_and_check_answers(context, question_index):
     """Handle poll closure and reveal answer"""
     global weekly_test
-    
+
     try:
         question = weekly_test.questions[question_index]
         await context.bot.send_message(
@@ -476,7 +479,7 @@ async def stop_poll_and_check_answers(context, question_index):
             text=f"✅ *Correct Answer:* {question['options'][question['correct_option']]}",
             parse_mode="Markdown"
         )
-        
+
         # Restore permissions after last question
         if question_index + 1 >= min(len(weekly_test.questions), MAX_QUESTIONS):
             await context.bot.set_chat_permissions(
@@ -657,27 +660,6 @@ async def start_quiz(context):
 
     except Exception as e:
         logger.error(f"Quiz start error: {e}")
-
-async def stop_poll_and_check_answers(context, question_index):
-    """Handle poll closure and reveal answer"""
-    global weekly_test
-
-    try:
-        question = weekly_test.questions[question_index]
-        await context.bot.send_message(
-            chat_id=DISCUSSION_GROUP_ID,
-            text=f"✅ *Correct Answer:* {question['options'][question['correct_option']]}",
-            parse_mode="Markdown"
-        )
-
-        # Restore permissions after last question
-        if question_index + 1 >= min(len(weekly_test.questions), MAX_QUESTIONS):
-            await context.bot.set_chat_permissions(
-                DISCUSSION_GROUP_ID,
-                permissions={"can_send_messages": True}
-            )
-    except Exception as e:
-        logger.error(f"Error handling poll closure: {e}")
 
 async def schedule_weekly_test(context):
     """Schedule weekly test for Friday 6 PM Gaza time"""
