@@ -123,6 +123,7 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"send_question: Failed to send question: {e}")
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.debug("handle_answer: function called")
     global answered_users, current_question, current_message_id, leaderboard
 
     query = update.callback_query
@@ -130,6 +131,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not query or not current_question:
         logger.warning("handle_answer: query or current_question is None")
+        logger.debug(f"handle_answer: query: {query}, current_question: {current_question}")
         return
 
     user_id = query.from_user.id
