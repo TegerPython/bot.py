@@ -49,74 +49,6 @@ async def fetch_json(url):
         logger.error(f"Error fetching {url}: {e}")
         return None
 
-def save_leaderboard():
-    try:
-        github_token = os.getenv("GITHUB_TOKEN")
-        repo_owner = "TegerPython"
-        repo_name = "bot_data"
-        file_path = "leaderboard.json"
-        headers = {"Authorization": f"token {github_token}", "Accept": "application/vnd.github.v3+json"}
-        get_response = requests.get(f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}", headers=headers)
-        get_response.raise_for_status()
-        sha = get_response.json()["sha"]
-        content = base64.b64encode(json.dumps(leaderboard, indent=4).encode("utf-8")).decode("utf-8")
-        data = {"message": "Update leaderboard", "content": content, "sha": sha, "branch": "main"}
-        update_response = requests.put(f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}", headers=headers, json=data)
-        update_response.raise_for_status()
-        logger.info("Leaderboard saved to GitHub.")
-    except Exception as e:
-        logger.error(f"Error saving leaderboard: {e}")
-
-# Core bot functions
-async def send_question(context: ContextTypes.DEFAULT_TYPE):
-    global current_question, answered_users, current_message_id
-    answered_users = set()
-    current_question = random.choice(questions)
-    keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in current_question.get("options", [])]
-    try:
-        message = await context.bot.send_message(CHANNEL_ID, current_question.get("question"), reply_markup=InlineKeyboardMarkup(keyboard))
-        current_message_id = message.message_id
-    except Exception as e:
-        logger.error(f"Failed to send question: {e}")
-
-async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if not query or not current_question or query.from_user.id in answered_users: return
-    answered_users.add(query.from_user.id)
-    user_id = query.from_user.id
-    username = query.from_user.first_name
-    correct = query.data.strip() == current_question.get("correct_option", "").strip()
-    if correct:
-        leaderboard.setdefault(str(user_id), {"username": username, "score": 0})["score"] += 1
-        explanation = current_question.get("explanation", "No explanation provided.")
-        try:
-            await context.bot.edit_message_text(f"📝 Daily Challenge (Answered)\n\nQuestion: {current_question.get('question')}\n✅ Correct Answer: {current_question.get('correct_option')}\nℹ️ Explanation: {explanation}\n\n🏆 Winner: {username}", chat_id=CHANNEL_ID, message_id=current_message_id, reply_markup=None)
-        except Exception as e:
-            logger.error(f"Failed to edit message: {e}")
-    save_leaderboard()
-
-async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return await update.message.reply_text("❌ Unauthorized.")
-    if not questions: return await update.message.reply_text("❌ No questions loaded!")
-    question = random.choice(questions)
-    keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in question.get("options", [])]
-    try:
-        await context.bot.send_message(CHANNEL_ID, question.get("question"), reply_markup=InlineKeyboardMarkup(keyboard))
-        await update.message.reply_text(f"✅ Test question sent in channel. Question: {question.get('question')}")
-    except Exception as e:
-        logger.error(f"Question send error: {e}")
-        await update.message.reply_text(f"❌ Error: {e}")
-
-async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
-        text = "🏆 Leaderboard 🏆\n\n" + "\n".join(f"{rank}. {player['username']}: {player['score']} points" for rank, (_, player) in enumerate(sorted_leaderboard, start=1))
-        await update.message.reply_text(text)
-    except Exception as e:
-        logger.error(f"Leaderboard error: {e}")
-        await update.message.reply_text("❌ Failed to display leaderboard.")
-
 # Weekly Test Class and Functions
 class WeeklyTest:
     def __init__(self): self.reset()
@@ -125,24 +57,6 @@ class WeeklyTest:
     def get_results(self): return sorted(self.participants.items(), key=lambda x: x[1]["score"], reverse=True)
 
 weekly_test = WeeklyTest()
-
-async def fetch_weekly_questions():
-    return await fetch_json(WEEKLY_QUESTIONS_JSON_URL) or []
-
-async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type != "private" or update.effective_user.id != OWNER_ID: return await update.message.reply_text("❌ Unauthorized.")
-    questions = await fetch_weekly_questions()
-    if not questions: return await update.message.reply_text("❌ No questions available.")
-    weekly_test.reset()
-    weekly_test.questions = [q for q in questions if q.get("id") not in used_weekly_questions][:MAX_QUESTIONS]
-    if not weekly_test.questions: return await update.message.reply_text("❌ No new questions available.")
-    weekly_test.active = True
-    chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
-    weekly_test.group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
-    message = await context.bot.send_message(CHANNEL_ID, "📢 *Weekly Test Starting Now!*\nJoin the Discussion group!", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]]))
-    weekly_test.channel_message_ids.append(message.message_id)
-    await send_weekly_question(context, 0)
-    await update.message.reply_text("🚀 Starting weekly test...")
 
 async def send_weekly_question(context, index):
     global weekly_test
@@ -199,7 +113,6 @@ async def send_leaderboard_results(context):
         weekly_test.active = False
         for user_id, data in results:
             leaderboard.setdefault(str(user_id), {"username": data["name"], "score": 0})["score"] += data["score"]
-        save_leaderboard()
     except Exception as e:
         logger.error(f"Error sending leaderboard: {e}")
 
