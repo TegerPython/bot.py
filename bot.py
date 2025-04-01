@@ -120,6 +120,65 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"send_question: Failed to send question: {e}")
 
+async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global answered_users, current_question, current_message_id, leaderboard
+
+    query = update.callback_query
+    await query.answer()  # Always answer the callback query
+
+    if not query:
+        logger.error("handle_answer: No query available.")
+        return
+
+    if not current_question:
+        logger.error("handle_answer: No current question available.")
+        return
+
+    user_id = query.from_user.id
+    username = query.from_user.first_name
+
+    if user_id in answered_users:
+        await query.answer("❌ You already answered this question.", show_alert=True)
+        return
+
+    answered_users.add(user_id)
+    user_answer = query.data.strip()
+    correct_answer = current_question.get("correct_option", "").strip()
+
+    logger.info(f"User answer: '{user_answer}'")
+    logger.info(f"Correct answer: '{correct_answer}'")
+
+    correct = user_answer == correct_answer
+
+    if correct:
+        await query.answer("✅ Correct!")
+        if str(user_id) not in leaderboard:
+            leaderboard[str(user_id)] = {"username": username, "score": 0}
+        leaderboard[str(user_id)]["score"] += 1
+
+        explanation = current_question.get("explanation", "No explanation provided.")
+        edited_text = (
+            "📝 Daily Challenge (Answered)\n\n"
+            f"Question: {current_question.get('question')}\n"
+            f"✅ Correct Answer: {current_question.get('correct_option')}\n"
+            f"ℹ️ Explanation: {explanation}\n\n"
+            f"🏆 Winner: {username}"
+        )
+        try:
+            await context.bot.edit_message_text(
+                chat_id=CHANNEL_ID,
+                message_id=current_message_id,
+                text=edited_text,
+                reply_markup=None  # Remove the inline keyboard
+            )
+            logger.info("handle_answer: Message edited successfully.")
+        except Exception as e:
+            logger.error(f"handle_answer: Failed to edit message: {e}")
+    else:
+        await query.answer("❌ Incorrect.", show_alert=True)
+
+    save_leaderboard()
+
 def save_leaderboard():
     try:
         github_token = os.getenv("GITHUB_TOKEN")
@@ -182,7 +241,7 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now().strftime("%Y-%m-%d %H:%:M:%S")
     await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
 
 async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -260,7 +319,7 @@ async def fetch_questions_from_url():
             
         async with aiohttp.ClientSession() as session:
             async with session.get(WEEKLY_QUESTIONS_JSON_URL) as response:
-                if response.status == 200:
+                if response.status == 200):
                     text_content = await response.text()
                     try:
                         data = json.loads(text_content)
@@ -361,7 +420,7 @@ async def send_question(context, question_index):
         # Send channel announcement
         channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
-            text=f"🎯 *QUESTION {question_index + 1} IS LIVE!* 🎯\n\n"
+            text=f"🎯 *QUESTION {question index + 1} IS LIVE!* 🎯\n\n"
                  f"{time_emoji} *Hurry!* Only {QUESTION_DURATION} seconds to answer!\n"
                  f"💡 Test your knowledge and earn points!\n\n",
             parse_mode="Markdown",
@@ -408,10 +467,205 @@ async def stop_poll_and_check_answers(context, question_index):
         )
         
         # Restore permissions after last question
-        if question_index + 1 >= min(len(weekly_test.questions), MAX_QUESTIONS):
+        if question index + 1 >= min(len(weekly_test.questions), MAX_QUESTIONS):
             await context.bot.set_chat_permissions(
                 DISCUSSION_GROUP_ID,
                 permissions={"can_send_messages": True}
+            )
+    except Exception as e:
+        logger.error(f"Error handling poll closure: {e}")
+
+async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle poll answers from group members"""
+    global weekly_test
+    
+    try:
+        if not weekly_test.active:
+            return
+            
+        poll_answer = update.poll_answer
+        poll_id = poll_answer.poll_id
+        
+        question_index = next(
+            (idx for idx, p_id in weekly_test.poll_ids.items() if p_id == poll_id),
+            None
+        )
+        if question_index is None:
+            return
+            
+        if poll_answer.option_ids and poll_answer.option_ids[0] == weekly_test.questions[question_index]["correct_option"]:
+            user = poll_answer.user
+            user_name = user.full_name or user.username or f"User {user.id}"
+            weekly_test.add_point(user.id, user_name)
+            
+    except Exception as e:
+        logger.error(f"Error handling poll answer: {e}")
+
+async def send_leaderboard_results(context):
+    """Send final leaderboard results"""
+    global weekly_test
+    
+    if not weekly_test.active:
+        return
+        
+    results = weekly_test.get_results()
+    
+    # Format leaderboard message
+    message = "🏆 *Final Results* 🏆\n\n"
+    if results:
+        for i, (user_id, data) in enumerate(results, start=1):
+            if i == 1:
+                message += f"🥇 *{data['name']}* - {data['score']} pts\n"
+            elif i == 2:
+                message += f"🥈 *{data['name']}* - {data['score']} pts\n"
+            elif i == 3:
+                message += f"🥉 *{data['name']}* - {data['score']} pts\n"
+            else:
+                message += f"{i}. {data['name']} - {data['score']} pts\n"
+            # Add weekly scores to main leaderboard
+            if str(user_id) not in leaderboard:
+                leaderboard[str(user_id)] = {"username": data["name"], "score": 0}
+            leaderboard[str(user_id)]["score"] += data["score"]
+    else:
+        message += "No participants this week."
+    
+    try:
+        # Delete previous channel messages
+        await delete_channel_messages(context)
+        
+        # Send final results
+        channel_message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=message,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
+            ])
+        )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
+        
+        await context.bot.set_chat_permissions(
+            DISCUSSION_GROUP_ID,
+            permissions={"can send messages": True}
+        )
+        
+        weekly_test.active = False
+        save_leaderboard()  # Save the updated leaderboard
+    except Exception as e:
+        logger.error(f"Error sending leaderboard: {e}")
+
+async def create_countdown_teaser(context):
+    """Create a live countdown teaser 30 minutes before the quiz"""
+    try:
+        # Get group invite link
+        chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
+        invite_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
+        
+        # Send initial teaser
+        message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text="🕒 *Quiz Countdown Begins!*\n\n"
+                 "The weekly quiz starts in 30 minutes!\n"
+                 "🕒 Countdown: 30:00 minutes",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join Discussion", url=invite_link)]
+            ])
+        )
+        weekly_test.channel_message_ids.append(message.message_id)
+        
+        # Create countdown job
+        async def update_countdown(remaining_time):
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=CHANNEL_ID,
+                    message_id=message.message_id,
+                    text=f"🕒 *Quiz Countdown!*\n\n"
+                         f"The weekly quiz starts in {remaining_time // 60:02d}:{remaining_time % 60:02d} minutes!\n"
+                         "Get ready to test your knowledge!",
+                    parse_mode="Markdown",
+                    reply_markup=message.reply_markup
+                )
+            except Exception as e:
+                logger.error(f"Countdown update error: {e}")
+        
+        # Schedule countdown updates every minute
+        for i in range(29, 0, -1):
+            context.job_queue.run_once(
+                lambda ctx, time=i*60: asyncio.create_task(update_countdown(time)),
+                (30-i)*60,
+                name=f"countdown_{i}"
+            )
+        
+        # Final job to start quiz and delete teaser
+        context.job_queue.run_once(
+            lambda ctx: asyncio.create_task(start_quiz(ctx)),
+            1800,  # 30 minutes
+            name="start_quiz"
+        )
+        
+    except Exception as e:
+        logger.error(f"Countdown teaser error: {e}")
+
+async def start_quiz(context):
+    """Start the weekly quiz"""
+    try:
+        # Fetch questions
+        questions = await fetch_questions_from_url()
+        if not questions:
+            logger.error("No questions available for the quiz")
+            return
+        
+        # Reset test and set questions
+        weekly_test.reset()
+        weekly_test.questions = [q for q in questions if q get("id") not in used weekly_questions]
+        if not weekly_test.questions:
+            logger.error("No new questions available for the weekly quiz")
+            return
+        weekly_test.active = True
+        
+        # Get group invite link
+        chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
+        weekly_test.group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
+        
+        # Delete previous teaser message
+        await delete_channel_messages(context)
+        
+        # Send quiz start message
+        channel_message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text="🚀 *Quiz Starts Now!*\n"
+                 "Get ready for the weekly challenge!",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
+            ])
+        )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
+        
+        # Start first question
+        await send_question(context, 0)
+        
+    except Exception as e:
+        logger.error(f"Quiz start error: {e}")
+
+async def stop_poll_and_check_answers(context, question_index):
+    """Handle poll closure and reveal answer"""
+    global weekly_test
+    
+    try:
+        question = weekly_test.questions[question_index]
+        await context.bot.send_message(
+            chat_id=DISCUSSION_GROUP_ID,
+            text=f"✅ *Correct Answer:* {question['options'][question['correct_option']]}",
+            parse_mode="Markdown"
+        )
+        
+        # Restore permissions after last question
+        if question index + 1 >= min(len(weekly_test.questions), MAX_QUESTIONS):
+            await context.bot.set_chat_permissions(
+                DISCUSSION_GROUP_ID,
+                permissions={"can send messages": True}
             )
     except Exception as e:
         logger.error(f"Error handling poll closure: {e}")
@@ -610,32 +864,6 @@ async def stop_poll_and_check_answers(context, question_index):
             )
     except Exception as e:
         logger.error(f"Error handling poll closure: {e}")
-
-async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle poll answers from group members"""
-    global weekly_test
-    
-    try:
-        if not weekly_test.active:
-            return
-            
-        poll_answer = update.poll_answer
-        poll_id = poll_answer.poll_id
-        
-        question_index = next(
-            (idx for idx, p_id in weekly_test.poll_ids.items() if p_id == poll_id),
-            None
-        )
-        if question_index is None:
-            return
-            
-        if poll_answer.option_ids and poll_answer.option_ids[0] == weekly_test.questions[question_index]["correct_option"]:
-            user = poll_answer.user
-            user_name = user.full_name or user.username or f"User {user.id}"
-            weekly_test.add_point(user.id, user_name)
-            
-    except Exception as e:
-        logger.error(f"Error handling poll answer: {e}")
 
 async def schedule_weekly_test(context):
     """Schedule weekly test for Friday 6 PM Gaza time"""
