@@ -126,12 +126,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()  # Always answer the callback query
 
-    if not query:
-        logger.error("handle_answer: No query available.")
-        return
-
-    if not current_question:
-        logger.error("handle_answer: No current question available.")
+    if not query or not current_question:
         return
 
     user_id = query.from_user.id
@@ -151,7 +146,6 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     correct = user_answer == correct_answer
 
     if correct:
-        await query.answer("✅ Correct!")
         if str(user_id) not in leaderboard:
             leaderboard[str(user_id)] = {"username": username, "score": 0}
         leaderboard[str(user_id)]["score"] += 1
@@ -171,12 +165,9 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=edited_text,
                 reply_markup=None  # Remove the inline keyboard
             )
-            logger.info("handle_answer: Message edited successfully.")
         except Exception as e:
-            logger.error(f"handle_answer: Failed to edit message: {e}")
-    else:
-        await query.answer("❌ Incorrect.", show_alert=True)
-
+            logger.error(f"Failed to edit message: {e}")
+    
     save_leaderboard()
 
 def save_leaderboard():
@@ -501,7 +492,7 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         logger.error(f"Error handling poll answer: {e}")
 
-async def send_leaderboard_results(context: ContextTypes.DEFAULT_TYPE):
+async def send_leaderboard_results(context):
     """Send final leaderboard results"""
     global weekly_test
     
@@ -554,7 +545,7 @@ async def send_leaderboard_results(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error sending leaderboard: {e}")
 
-async def create_countdown_teaser(context: ContextTypes.DEFAULT_TYPE):
+async def create_countdown_teaser(context):
     """Create a live countdown teaser 30 minutes before the quiz"""
     try:
         # Get group invite link
@@ -607,7 +598,7 @@ async def create_countdown_teaser(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Countdown teaser error: {e}")
 
-async def start_quiz(context: ContextTypes.DEFAULT_TYPE):
+async def start_quiz(context):
     """Start the weekly quiz"""
     try:
         # Fetch questions
@@ -649,7 +640,7 @@ async def start_quiz(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Quiz start error: {e}")
 
-async def stop_poll_and_check_answers(context: ContextTypes.DEFAULT_TYPE, question_index: int):
+async def stop_poll_and_check_answers(context, question_index):
     """Handle poll closure and reveal answer"""
     global weekly_test
     
@@ -696,7 +687,7 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         logger.error(f"Error handling poll answer: {e}")
 
-async def schedule_weekly_test(context: ContextTypes.DEFAULT_TYPE):
+async def schedule_weekly_test(context):
     """Schedule weekly test for Friday 6 PM Gaza time"""
     try:
         gaza_tz = pytz.timezone('Asia/Gaza')
@@ -747,7 +738,7 @@ def main():
         5,  # Initial delay to let the bot start
         name="initial_schedule"
     )
-    
+    a
     # Start bot
     if WEBHOOK_URL:
         application.run_webhook(
