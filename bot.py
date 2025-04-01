@@ -124,14 +124,16 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global answered_users, current_question, current_message_id, leaderboard
 
     query = update.callback_query
-    await query.answer()  # Always answer the callback query
-
     if not query:
         logger.error("handle_answer: No query available.")
         return
+    
+    await query.answer()  # Always answer the callback query
 
-    if not current_question:
+    # Check if current_question exists
+    if current_question is None:
         logger.error("handle_answer: No current question available.")
+        await query.answer("Sorry, no active question at the moment.", show_alert=True)
         return
 
     user_id = query.from_user.id
