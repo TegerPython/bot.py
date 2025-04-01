@@ -126,7 +126,12 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()  # Always answer the callback query
 
-    if not query or not current_question:
+    if not query:
+        logger.error("handle_answer: No query available.")
+        return
+
+    if not current_question:
+        logger.error("handle_answer: No current question available.")
         return
 
     user_id = query.from_user.id
@@ -166,10 +171,12 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=edited_text,
                 reply_markup=None  # Remove the inline keyboard
             )
+            logger.info("handle_answer: Message edited successfully.")
         except Exception as e:
-            logger.error(f"Failed to edit message: {e}")
+            logger.error(f"handle_answer: Failed to edit message: {e}")
     else:
-        await query.answer("❌ Incorrect.")
+        await query.answer("❌ Incorrect.", show_alert=True)
+
     save_leaderboard()
 
 def save_leaderboard():
