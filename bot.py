@@ -902,4 +902,220 @@ async def send_leaderboard_results(context):
         logger.error(f"Error sending leaderboard: {e}")
 
 async def create_countdown_teaser(context):
-    """Create a live countdown teaser 30 minutes before the
+    """Create a live countdown teaser 30 minutes before the quiz"""
+    try:
+        # Get group invite link
+        chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
+        invite_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
+        
+        # Send initial teaser
+        message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text="🕒 *Quiz Countdown Begins!*\n\n"
+                 "The weekly quiz starts in 30 minutes!\n"
+                 "🕒 Countdown: 30:00 minutes",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join Discussion", url=invite_link)]
+            ])
+        )
+        weekly_test.channel_message_ids.append(message.message_id)
+        
+        # Create countdown job
+        async def update_countdown(remaining_time):
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=CHANNEL_ID,
+                    message_id=message.message_id,
+                    text=f"🕒 *Quiz Countdown!*\n\n"
+                         f"The weekly quiz starts in {remaining_time // 60:02d}:{remaining_time % 60:02d} minutes!\n"
+                         "Get ready to test your knowledge!",
+                    parse_mode="Markdown",
+                    reply_markup=message.reply_markup
+                )
+            except Exception as e:
+                logger.error(f"Countdown update error: {e}")
+        
+        # Schedule countdown updates every minute
+        for i in range(29, 0, -1):
+            context.job_queue.run_once(
+                lambda ctx, time=i*60: asyncio.create_task(update_countdown(time)),
+                (30-i)*60,
+                name=f"countdown_{i}"
+            )
+        
+        # Final job to start quiz and delete teaser
+        context.job_queue.run_once(
+            lambda ctx: asyncio.create_task(start_quiz(ctx)),
+            1800,  # 30 minutes
+            name="start_quiz"
+        )
+        
+    except Exception as e:
+        logger.error(f"Countdown teaser error: {e}")
+
+async def start_quiz(context):
+    """Start the weekly quiz"""
+    try:
+        # Fetch questions
+        questions = await fetch_questions_from_url()
+        if not questions:
+            logger.error("No questions available for the quiz")
+            return
+        
+        # Reset test and set questions
+        weekly_test.reset()
+        weekly_test.questions = [q for q in questions if q.get("id") not in used_weekly_questions]
+        if not weekly_test.questions:
+            logger.error("No new questions available for the weekly quiz")
+            return
+        weekly_test.active = True
+        
+        # Get group invite link
+        chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
+        weekly_test.group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
+        
+        # Delete previous teaser message
+        await delete_channel_messages(context)
+        
+        # Send quiz start message
+        channel_message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text="🚀 *Quiz Starts Now!*\n"
+                 "Get ready for the weekly challenge!",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
+            ])
+        )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
+        
+        # Start first question
+        await send_question(context, 0)
+        
+    except Exception as e:
+        logger.error(f"Quiz start error: {e}")
+
+async def stop_poll_and_check_answers(context, question_index):
+    """Handle poll closure and reveal answer"""
+    global weekly_test
+    
+    try:
+        question = weekly_test.questions[question_index]
+        await context.bot.send_message(
+            chat_id=DISCUSSION_GROUP_ID,
+            text=f"✅ *Correct Answer:* {question['options'][question['correct_option']]}",
+            parse_mode="Markdown"
+        )
+        
+        # Restore permissions after last question
+        if question_index + 1 >= min(len(weekly_test.questions), MAX_QUESTIONS):
+            await context.bot.set_chat_permissions(
+                DISCUSSION_GROUP_ID,
+                permissions={"can_send_messages": True}
+            )
+    except Exception as e:
+        logger.error(f"Error handling poll closure: {e}")
+
+async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle poll answers from group members"""
+    global weekly_test
+    
+    try:
+        if not weekly_test.active:
+            return
+            
+        poll_answer = update.poll_answer
+        poll_id = poll_answer.poll_id
+        
+        question_index = next(
+            (idx for idx, p_id in weekly_test.poll_ids.items() if p_id == poll_id),
+            None
+        )
+        if question_index is None:
+            return
+            
+        if poll_answer.option_ids and poll_answer.option_ids[0] == weekly_test.questions[question_index]["correct_option"]:
+            user = poll_answer.user
+            user_name = user.full_name or user.username or f"User {user.id}"
+            weekly_test.add_point(user.id, user_name)
+            
+    except Exception as e:
+        logger.error(f"Error handling poll answer: {e}")
+
+async def schedule_weekly_test(context):
+    """Schedule weekly test for Friday 6 PM Gaza time"""
+    try:
+        gaza_tz = pytz.timezone('Asia/Gaza')
+        now = datetime.now(gaza_tz)
+        
+        # Calculate next Friday at 6 PM
+        days_until_friday = (4 - now.weekday()) % 7
+        if days_until_friday == 0 and now.hour >= 18:
+            days_until_friday = 7
+            
+        next_friday = now + timedelta(days=days_until_friday)
+        next_friday = next_friday.replace(hour=18, minute=0, second=0, microsecond=0)
+        
+        # Calculate time for teaser (30 minutes before quiz)
+        teaser_time = next_friday - timedelta(minutes=30)
+        
+        seconds_until_teaser = max(0, (teaser_time - now).total_seconds())
+        
+        # Schedule teaser
+        context.job_queue.run_once(
+            lambda ctx: asyncio.create_task(create_countdown_teaser(ctx)),
+            seconds_until_teaser,
+            name="quiz_teaser"
+        )
+        
+        logger.info(f"Scheduled next test teaser for {teaser_time}")
+        logger.info(f"Scheduled next test for {next_friday}")
+        
+    except Exception as e:
+        logger.error(f"Error scheduling weekly test: {e}")
+
+from telegram.ext import TypeHandler
+
+async def error_handler(update, context):
+    logger.error(msg="Exception while handling an update:", exc_info=context.error)
+
+def main():
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # Command handlers
+    application.add_handler(CallbackQueryHandler(handle_answer))
+    application.add_handler(CommandHandler("start", start_test_command))
+    application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("test", test_question))
+    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
+    application.add_handler(CommandHandler("mystats", mystats_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("resetleaderboard", reset_leaderboard_command, filters=filters.ChatType.PRIVATE))
+    
+    # Poll answer handler
+    application.add_handler(PollAnswerHandler(handle_poll_answer))
+    
+    # Error handler
+    application.add_error_handler(TypeHandler(Exception, error_handler))
+
+    # Initial scheduling
+    application.job_queue.run_once(
+        lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
+        5,  # Initial delay to let the bot start
+        name="initial_schedule"
+    )
+    
+    # Start bot
+    if WEBHOOK_URL:
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=BOT_TOKEN,
+            webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+            drop_pending_updates=True
+        )
+    else:
+        application.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
