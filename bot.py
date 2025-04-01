@@ -100,19 +100,10 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
     global current_question, answered_users, current_message_id
     answered_users = set()
     current_question = random.choice(questions)
-    if not current_question:
-        logger.error("send_question: Failed to select a question.")
-        return
-
-    # Log the selected question
-    logger.info(f"send_question: Selected question: {current_question}")
-
     keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in current_question.get("options", [])]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
-        # Log before sending the message
-        logger.info("send_question: Attempting to send question message to the channel.")
         message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text=current_question.get("question"),
@@ -122,9 +113,10 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
         )
         if message and message.message_id:
             current_message_id = message.message_id
-            logger.info("send_question: Message sent successfully")
+            logger.info("send_question: message sent successfully")
         else:
-            logger.info("send_question: Message sending failed")
+            logger.info("send_question: message sending failed")
+
     except Exception as e:
         logger.error(f"send_question: Failed to send question: {e}")
 
@@ -134,12 +126,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()  # Always answer the callback query
 
-    if not query:
-        logger.error("handle_answer: No query available.")
-        return
-
-    if not current_question:
-        logger.error("handle_answer: No current question available.")
+    if not query or not current_question:
         return
 
     user_id = query.from_user.id
@@ -178,12 +165,9 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=edited_text,
                 reply_markup=None  # Remove the inline keyboard
             )
-            logger.info("handle_answer: Message edited successfully.")
         except Exception as e:
-            logger.error(f"handle_answer: Failed to edit message: {e}")
-    else:
-        await query.answer("❌ Incorrect.", show_alert=True)
-
+            logger.error(f"Failed to edit message: {e}")
+    
     save_leaderboard()
 
 def save_leaderboard():
@@ -339,292 +323,6 @@ async def fetch_questions_from_url():
     except Exception as e:
         logger.error(f"Error fetching questions: {e}")
     return []
-
-async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show personal progress"""
-    user_id = str(update.effective_user.id)
-    
-    if user_id not in leaderboard:
-        await update.message.reply_text("❌ You have no recorded progress yet.")
-        return
-    
-    user_stats = leaderboard[user_id]
-    stats_message = (
-        f"📊 *Your Stats*\n\n"
-        f"Username: {user_stats['username']}\n"
-        f"Score: {user_stats['score']} points\n"
-        f"Total Questions Answered: {user_stats.get('total_answered', 0)}\n"
-        f"Total Correct Answers: {user_stats.get('total_correct', 0)}"
-    )
-    await update.message.reply_text(stats_message, parse_mode="Markdown")
-
-async def reset_leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Clear all scores (Owner only)"""
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-    
-    global leaderboard
-    leaderboard = {}
-    save_leaderboard()
-    await update.message.reply_text("✅ Leaderboard has been reset.")
-
-async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start test immediately (owner only)"""
-    if update.effective_chat.type != "private" or update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-        
-    try:
-        questions = await fetch_questions_from_url()
-        if not questions:
-            await update.message.reply_text("❌ No questions available")
-            return
-            
-        weekly_test.reset()
-        weekly_test.questions = [q for q in questions if q.get("id") not in used_weekly_questions]
-        if not weekly_test.questions:
-            await update.message.reply_text("❌ No new questions available for the weekly quiz")
-            return
-        weekly_test.active = True
-        
-        # Get group invite link
-        chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
-        weekly_test.group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
-        
-        # Send initial message to channel
-        channel_message = await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text="📢 *Weekly Test Starting Now!*\n"
-                 "Join the Discussion group to participate!...",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
-            ])
-        )
-        weekly_test.channel_message_ids.append(channel_message.message_id)
-        
-        await update.message.reply_text("🚀 Starting weekly test...")
-        await send_question(context, 0)
-        
-    except Exception as e:
-        logger.error(f"Error starting test: {e}")
-        await update.message.reply_text(f"❌ Failed to start: {str(e)}")
-
-async def send_question(context: ContextTypes.DEFAULT_TYPE):
-    global current_question, answered_users, current_message_id
-    answered_users = set()
-    current_question = random.choice(questions)
-    if not current_question:
-        logger.error("send_question: Failed to select a question.")
-        return
-
-    # Log the selected question
-    logger.info(f"send_question: Selected question: {current_question}")
-
-    keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in current_question.get("options", [])]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    try:
-        # Log before sending the message
-        logger.info("send_question: Attempting to send question message to the channel.")
-        message = await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=current_question.get("question"),
-            reply_markup=reply_markup,
-            disable_web_page_preview=True,
-            disable_notification=False,
-        )
-        if message and message.message_id:
-            current_message_id = message.message_id
-            logger.info("send_question: Message sent successfully, message_id: {current_message_id}")
-        else:
-            logger.info("send_question: Message sending failed")
-    except Exception as e:
-        logger.error(f"send_question: Failed to send question: {e}")
-
-def save_leaderboard():
-    try:
-        github_token = os.getenv("GITHUB_TOKEN")
-        repo_owner = "TegerPython"  # Replace with your GitHub username
-        repo_name = "bot_data"  # Replace with your repository name
-        file_path = "leaderboard.json"
-
-        # Get the current file's SHA for updating
-        get_file_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
-        headers = {"Authorization": f"token {github_token}", "Accept": "application/vnd.github.v3+json"}
-        get_response = requests.get(get_file_url, headers=headers)
-        get_response.raise_for_status()
-        sha = get_response.json()["sha"]
-
-        # Update the file
-        content = json.dumps(leaderboard, indent=4).encode("utf-8")
-        encoded_content = base64.b64encode(content).decode("utf-8")
-
-        update_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
-        data = {
-            "message": "Update leaderboard",
-            "content": encoded_content,
-            "sha": sha,
-            "branch": "main",  # Or your branch name
-        }
-        update_response = requests.put(update_url, headers=headers, json=data)
-        update_response.raise_for_status()
-
-        logger.info("Leaderboard saved successfully to GitHub.")
-    except Exception as e:
-        logger.error(f"Error saving leaderboard to GitHub: {e}")
-
-async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-    
-    if not questions:
-        await update.message.reply_text("❌ No questions loaded!")
-        return
-    
-    # Select a random question
-    question = random.choice(questions)
-    
-    try:
-        keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in question.get("options", [])]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        message = await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=question.get("question"),
-            reply_markup=reply_markup,
-            disable_web_page_preview=True,
-            disable_notification=False,
-        )
-        
-        await update.message.reply_text(f"✅ Test question sent in channel. Question: {question.get('question')}")
-    except Exception as e:
-        logger.error(f"Question sending error: {e}")
-        await update.message.reply_text(f"❌ Error: {str(e)}")
-
-async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
-
-async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-    await context.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}")
-    await update.message.reply_text("✅ Webhook refreshed.")
-
-async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    try:
-        logger.info(f"Leaderboard data: {leaderboard}")
-        sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
-        leaderboard_text = "🏆 Leaderboard 🏆\n\n"
-        for rank, (user_id, player) in enumerate(sorted_leaderboard, start=1):
-            leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
-        await update.message.reply_text(leaderboard_text)
-    except KeyError as e:
-        logger.error(f"Error in leaderboard_command: KeyError - {e}")
-        await update.message.reply_text("❌ Failed to display leaderboard due to data error.")
-    except Exception as e:
-        logger.error(f"Error in leaderboard_command: {e}")
-        await update.message.reply_text("❌ Failed to display leaderboard.")
-
-# Weekly Test Functions
-class WeeklyTest:
-    def __init__(self):
-        self.reset()
-        
-    def reset(self):
-        self.questions = []
-        self.current_question_index = 0
-        self.participants = {}
-        self.active = False
-        self.poll_ids = {}
-        self.poll_messages = {}
-        self.channel_message_ids = []
-        self.group_link = None
-
-    def add_point(self, user_id, user_name):
-        if user_id not in self.participants:
-            self.participants[user_id] = {"name": user_name, "score": 0}
-        self.participants[user_id]["score"] += 1
-
-    def get_results(self):
-        return sorted(
-            self.participants.items(),
-            key=lambda x: x[1]["score"],
-            reverse=True
-        )
-
-weekly_test = WeeklyTest()
-
-async def delete_channel_messages(context):
-    """Delete all channel messages from this test"""
-    try:
-        for msg_id in weekly_test.channel_message_ids:
-            try:
-                await context.bot.delete_message(
-                    chat_id=CHANNEL_ID,
-                    message_id=msg_id
-                )
-            except Exception as e:
-                logger.warning(f"Couldn't delete channel message {msg_id}: {e}")
-        weekly_test.channel_message_ids = []
-    except Exception as e:
-        logger.error(f"Error deleting channel messages: {e}")
-
-async def fetch_questions_from_url():
-    """Fetch questions from external JSON URL"""
-    try:
-        if not WEEKLY_QUESTIONS_JSON_URL:
-            logger.error("WEEKLY_QUESTIONS_JSON_URL not set")
-            return []
-            
-        async with aiohttp.ClientSession() as session:
-            async with session.get(WEEKLY_QUESTIONS_JSON_URL) as response:
-                if response.status == 200:
-                    text_content = await response.text()
-                    try:
-                        data = json.loads(text_content)
-                        logger.info(f"Fetched {len(data)} questions")
-                        return data[:MAX_QUESTIONS]
-                    except json.JSONDecodeError as je:
-                        logger.error(f"JSON error: {je}, content: {text_content[:200]}...")
-                        return []
-                logger.error(f"Failed to fetch: HTTP {response.status}")
-    except Exception as e:
-        logger.error(f"Error fetching questions: {e}")
-    return []
-
-async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show personal progress"""
-    user_id = str(update.effective_user.id)
-    
-    if user_id not in leaderboard:
-        await update.message.reply_text("❌ You have no recorded progress yet.")
-        return
-    
-    user_stats = leaderboard[user_id]
-    stats_message = (
-        f"📊 *Your Stats*\n\n"
-        f"Username: {user_stats['username']}\n"
-        f"Score: {user_stats['score']} points\n"
-        f"Total Questions Answered: {user_stats.get('total_answered', 0)}\n"
-        f"Total Correct Answers: {user_stats.get('total_correct', 0)}"
-    )
-    await update.message.reply_text(stats_message, parse_mode="Markdown")
-
-async def reset_leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Clear all scores (Owner only)"""
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-    
-    global leaderboard
-    leaderboard = {}
-    save_leaderboard()
-    await update.message.reply_text("✅ Leaderboard has been reset.")
 
 async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start test immediately (owner only)"""
@@ -1021,11 +719,6 @@ async def schedule_weekly_test(context):
     except Exception as e:
         logger.error(f"Error scheduling weekly test: {e}")
 
-from telegram.ext import TypeHandler
-
-async def error_handler(update, context):
-    logger.error(msg="Exception while handling an update:", exc_info=context.error)
-
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     
@@ -1035,22 +728,17 @@ def main():
     application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("test", test_question))
     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
-    application.add_handler(CommandHandler("mystats", mystats_command, filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("resetleaderboard", reset_leaderboard_command, filters=filters.ChatType.PRIVATE))
     
     # Poll answer handler
     application.add_handler(PollAnswerHandler(handle_poll_answer))
     
-    # Error handler
-    application.add_error_handler(TypeHandler(Exception, error_handler))
-
     # Initial scheduling
     application.job_queue.run_once(
         lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
         5,  # Initial delay to let the bot start
         name="initial_schedule"
     )
-    
+    a
     # Start bot
     if WEBHOOK_URL:
         application.run_webhook(
