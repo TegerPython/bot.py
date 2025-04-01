@@ -41,6 +41,7 @@ current_question = None
 current_message_id = None
 user_answers = {}
 answered_users = set()
+used_weekly_questions = set()
 
 # Load Questions from URL
 DEBUG = True  # Set to True for extra debugging
@@ -214,7 +215,7 @@ def save_leaderboard():
             "sha": sha,
             "branch": "main",  # Or your branch name
         }
-        update_response = requests.put(update_url, headers=headers, json=data)
+        update_response = requests.put(update_url, headers=headers, json(data))
         update_response.raise_for_status()
 
         logger.info("Leaderboard saved successfully to GitHub.")
@@ -490,34 +491,34 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         if not weekly_test.active:
             return
-            
+
         poll_answer = update.poll_answer
         poll_id = poll_answer.poll_id
-        
+
         question_index = next(
             (idx for idx, p_id in weekly_test.poll_ids.items() if p_id == poll_id),
             None
         )
         if question_index is None:
             return
-            
+
         if poll_answer.option_ids and poll_answer.option_ids[0] == weekly_test.questions[question_index]["correct_option"]:
             user = poll_answer.user
             user_name = user.full_name or user.username or f"User {user.id}"
             weekly_test.add_point(user.id, user_name)
-            
+
     except Exception as e:
         logger.error(f"Error handling poll answer: {e}")
 
 async def send_leaderboard_results(context):
     """Send final leaderboard results"""
     global weekly_test
-    
+
     if not weekly_test.active:
         return
-        
+
     results = weekly_test.get_results()
-    
+
     # Format leaderboard message
     message = "🏆 *Final Results* 🏆\n\n"
     if results:
@@ -536,11 +537,11 @@ async def send_leaderboard_results(context):
             leaderboard[str(user_id)]["score"] += data["score"]
     else:
         message += "No participants this week."
-    
+
     try:
         # Delete previous channel messages
         await delete_channel_messages(context)
-        
+
         # Send final results
         channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
@@ -551,12 +552,12 @@ async def send_leaderboard_results(context):
             ])
         )
         weekly_test.channel_message_ids.append(channel_message.message_id)
-        
+
         await context.bot.set_chat_permissions(
             DISCUSSION_GROUP_ID,
             permissions={"can_send_messages": True}
         )
-        
+
         weekly_test.active = False
         save_leaderboard()  # Save the updated leaderboard
     except Exception as e:
@@ -568,7 +569,7 @@ async def create_countdown_teaser(context):
         # Get group invite link
         chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
         invite_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
-        
+
         # Send initial teaser
         message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
@@ -581,7 +582,7 @@ async def create_countdown_teaser(context):
             ])
         )
         weekly_test.channel_message_ids.append(message.message_id)
-        
+
         # Create countdown job
         async def update_countdown(remaining_time):
             try:
@@ -596,22 +597,22 @@ async def create_countdown_teaser(context):
                 )
             except Exception as e:
                 logger.error(f"Countdown update error: {e}")
-        
+
         # Schedule countdown updates every minute
         for i in range(29, 0, -1):
             context.job_queue.run_once(
-                lambda ctx, time=i*60: asyncio.create_task(update_countdown(time)),
-                (30-i)*60,
+                lambda ctx, time=i * 60: asyncio.create_task(update_countdown(time)),
+                (30 - i) * 60,
                 name=f"countdown_{i}"
             )
-        
+
         # Final job to start quiz and delete teaser
         context.job_queue.run_once(
             lambda ctx: asyncio.create_task(start_quiz(ctx)),
             1800,  # 30 minutes
             name="start_quiz"
         )
-        
+
     except Exception as e:
         logger.error(f"Countdown teaser error: {e}")
 
@@ -623,7 +624,7 @@ async def start_quiz(context):
         if not questions:
             logger.error("No questions available for the quiz")
             return
-        
+
         # Reset test and set questions
         weekly_test.reset()
         weekly_test.questions = [q for q in questions if q.get("id") not in used_weekly_questions]
@@ -631,14 +632,14 @@ async def start_quiz(context):
             logger.error("No new questions available for the weekly quiz")
             return
         weekly_test.active = True
-        
+
         # Get group invite link
         chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
         weekly_test.group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
-        
+
         # Delete previous teaser message
         await delete_channel_messages(context)
-        
+
         # Send quiz start message
         channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
@@ -650,17 +651,17 @@ async def start_quiz(context):
             ])
         )
         weekly_test.channel_message_ids.append(channel_message.message_id)
-        
+
         # Start first question
         await send_weekly_question(context, 0)
-        
+
     except Exception as e:
         logger.error(f"Quiz start error: {e}")
 
 async def stop_poll_and_check_answers(context, question_index):
     """Handle poll closure and reveal answer"""
     global weekly_test
-    
+
     try:
         question = weekly_test.questions[question_index]
         await context.bot.send_message(
@@ -668,7 +669,7 @@ async def stop_poll_and_check_answers(context, question_index):
             text=f"✅ *Correct Answer:* {question['options'][question['correct_option']]}",
             parse_mode="Markdown"
         )
-        
+
         # Restore permissions after last question
         if question_index + 1 >= min(len(weekly_test.questions), MAX_QUESTIONS):
             await context.bot.set_chat_permissions(
@@ -683,36 +684,69 @@ async def schedule_weekly_test(context):
     try:
         gaza_tz = pytz.timezone('Asia/Gaza')
         now = datetime.now(gaza_tz)
-        
+
         # Calculate next Friday at 6 PM
         days_until_friday = (4 - now.weekday()) % 7
         if days_until_friday == 0 and now.hour >= 18:
             days_until_friday = 7
-            
+
         next_friday = now + timedelta(days=days_until_friday)
         next_friday = next_friday.replace(hour=18, minute=0, second=0, microsecond=0)
-        
+
         # Calculate time for teaser (30 minutes before quiz)
         teaser_time = next_friday - timedelta(minutes=30)
-        
+
         seconds_until_teaser = max(0, (teaser_time - now).total_seconds())
-        
+
         # Schedule teaser
         context.job_queue.run_once(
             lambda ctx: asyncio.create_task(create_countdown_teaser(ctx)),
             seconds_until_teaser,
             name="quiz_teaser"
         )
-        
+
         logger.info(f"Scheduled next test teaser for {teaser_time}")
         logger.info(f"Scheduled next test for {next_friday}")
-        
+
     except Exception as e:
         logger.error(f"Error scheduling weekly test: {e}")
 
+async def debug_env(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+
+    # Check key environment variables
+    debug_info = "🔍 Debug Information:\n\n"
+    debug_info += f"BOT_TOKEN: {'✅ Set' if BOT_TOKEN else '❌ Missing'}\n"
+    debug_info += f"CHANNEL_ID: {CHANNEL_ID}\n"
+    debug_info += f"OWNER_ID: {OWNER_ID}\n"
+    debug_info += f"DISCUSSION_GROUP_ID: {DISCUSSION_GROUP_ID}\n"
+    debug_info += f"QUESTIONS_JSON_URL: {QUESTIONS_JSON_URL}\n"
+    debug_info += f"Questions loaded: {len(questions)}\n"
+    debug_info += f"Current question: {'✅ Set' if current_question else '❌ None'}\n"
+
+    await update.message.reply_text(debug_info)
+
+async def force_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global current_question, current_message_id, answered_users
+
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+
+    if not questions:
+        await update.message.reply_text("❌ No questions loaded. Check JSON URL.")
+        return
+
+    answered_users = set()
+    current_question = random.choice(questions)
+
+    await update.message.reply_text(f"✅ Manually set current_question: {current_question.get('question')}")
+
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
-    
+
     # Command handlers
     application.add_handler(CallbackQueryHandler(handle_answer))
     application.add_handler(CommandHandler("start", start_test_command))
@@ -721,17 +755,17 @@ def main():
     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
     application.add_handler(CommandHandler("forcequestion", force_question))
     application.add_handler(CommandHandler("debug", debug_env))
-    
+
     # Poll answer handler
     application.add_handler(PollAnswerHandler(handle_poll_answer))
-    
+
     # Initial scheduling
     application.job_queue.run_once(
         lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
         5,  # Initial delay to let the bot start
         name="initial_schedule"
     )
-    
+
     # Start bot
     if WEBHOOK_URL:
         application.run_webhook(
