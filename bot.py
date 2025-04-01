@@ -99,24 +99,11 @@ load_weekly_questions()
 async def send_question(context: ContextTypes.DEFAULT_TYPE):
     global current_question, answered_users, current_message_id
     answered_users = set()
-    if not questions:
-        logger.error("No questions available to send.")
-        return
-
     current_question = random.choice(questions)
-    if not current_question:
-        logger.error("Failed to select a question.")
-        return
-
-    # Log the selected question
-    logger.info(f"Selected question: {current_question}")
-
     keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in current_question.get("options", [])]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
-        # Log before sending the message
-        logger.info("Attempting to send question message to the channel.")
         message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text=current_question.get("question"),
@@ -129,24 +116,19 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
             logger.info("send_question: message sent successfully")
         else:
             logger.info("send_question: message sending failed")
+
     except Exception as e:
         logger.error(f"send_question: Failed to send question: {e}")
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global answered_users, current_question, current_message_id, leaderboard
 
-    # Log when handle_answer is called
-    logger.info("handle_answer: Called.")
+    query = update.callback_query
+    await query.answer()  # Always answer the callback query
 
-    if not current_question:
-        logger.error("handle_answer: No current question available.")
-        await update.callback_query.answer("❌ No current question available.", show_alert=True)
+    if not query or not current_question:
         return
 
-    # Log the current question
-    logger.info(f"Handling answer for question: {current_question}")
-
-    query = update.callback_query
     user_id = query.from_user.id
     username = query.from_user.first_name
 
@@ -163,36 +145,31 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     correct = user_answer == correct_answer
 
-    if str(user_id) not in leaderboard:
-        leaderboard[str(user_id)] = {"username": username, "score": 0, "total_answered": 0, "total_correct": 0}
-
-    leaderboard[str(user_id)]["total_answered"] += 1
-
     if correct:
-        await query.answer("✅ Correct!")
+        if str(user_id) not in leaderboard:
+            leaderboard[str(user_id)] = {"username": username, "score": 0}
         leaderboard[str(user_id)]["score"] += 1
-        leaderboard[str(user_id)]["total_correct"] += 1
-    else:
-        await query.answer("❌ Incorrect.", show_alert=True)
 
-    explanation = current_question.get("explanation", "No explanation provided.")
-    edited_text = (
-        "📝 Daily Challenge (Answered)\n\n"
-        f"Question: {current_question.get('question')}\n"
-        f"✅ Correct Answer: {current_question.get('correct_option')}\n"
-        f"ℹ️ Explanation: {explanation}\n\n"
-        f"🏆 Winner: {username}"
-    )
-    try:
-        await context.bot.edit_message_text(
-            chat_id=CHANNEL_ID,
-            message_id=current_message_id,
-            text=edited_text,
-            reply_markup=None  # Remove the inline keyboard
+        explanation = current_question.get("explanation", "No explanation provided.")
+        edited_text = (
+            "📝 Daily Challenge (Answered)\n\n"
+            f"Question: {current_question.get('question')}\n"
+            f"✅ Correct Answer: {current_question.get('correct_option')}\n"
+            f"ℹ️ Explanation: {explanation}\n\n"
+            f"🏆 Winner: {username}"
         )
-    except Exception as e:
-        logger.error(f"Failed to edit message: {e}")
-
+        try:
+            await context.bot.edit_message_text(
+                chat_id=CHANNEL_ID,
+                message_id=current_message_id,
+                text=edited_text,
+                reply_markup=None  # Remove the inline keyboard
+            )
+        except Exception as e:
+            logger.error(f"Failed to edit message: {e}")
+    
+    save_leaderboard()
+    
     save_leaderboard()
 
 def save_leaderboard():
@@ -451,62 +428,29 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"send_question: Failed to send question: {e}")
 
-async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global answered_users, current_question, current_message_id, leaderboard
+async def send_question(context: ContextTypes.DEFAULT_TYPE):
+    global current_question, answered_users, current_message_id
+    answered_users = set()
+    current_question = random.choice(questions)
+    keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in current_question.get("options", [])]
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
-    if not current_question:
-        logger.error("handle_answer: No current question available.")
-        await update.callback_query.answer("❌ No current question available.", show_alert=True)
-        return
-
-    query = update.callback_query
-    user_id = query.from_user.id
-    username = query.from_user.first_name
-
-    if user_id in answered_users:
-        await query.answer("❌ You already answered this question.", show_alert=True)
-        return
-
-    answered_users.add(user_id)
-    user_answer = query.data.strip()
-    correct_answer = current_question.get("correct_option", "").strip()
-
-    logger.info(f"User answer: '{user_answer}'")
-    logger.info(f"Correct answer: '{correct_answer}'")
-
-    correct = user_answer == correct_answer
-
-    if str(user_id) not in leaderboard:
-        leaderboard[str(user_id)] = {"username": username, "score": 0, "total_answered": 0, "total_correct": 0}
-
-    leaderboard[str(user_id)]["total_answered"] += 1
-
-    if correct:
-        await query.answer("✅ Correct!")
-        leaderboard[str(user_id)]["score"] += 1
-        leaderboard[str(user_id)]["total_correct"] += 1
-    else:
-        await query.answer("❌ Incorrect.", show_alert=True)
-
-    explanation = current_question.get("explanation", "No explanation provided.")
-    edited_text = (
-        "📝 Daily Challenge (Answered)\n\n"
-        f"Question: {current_question.get('question')}\n"
-        f"✅ Correct Answer: {current_question.get('correct_option')}\n"
-        f"ℹ️ Explanation: {explanation}\n\n"
-        f"🏆 Winner: {username}"
-    )
     try:
-        await context.bot.edit_message_text(
+        message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
-            message_id=current_message_id,
-            text=edited_text,
-            reply_markup=None  # Remove the inline keyboard
+            text=current_question.get("question"),
+            reply_markup=reply_markup,
+            disable_web_page_preview=True,
+            disable_notification=False,
         )
-    except Exception as e:
-        logger.error(f"Failed to edit message: {e}")
+        if message and message.message_id:
+            current_message_id = message.message_id
+            logger.info("send_question: message sent successfully")
+        else:
+            logger.info("send_question: message sending failed")
 
-    save_leaderboard()
+    except Exception as e:
+        logger.error(f"send_question: Failed to send question: {e}")
 
 def save_leaderboard():
     try:
