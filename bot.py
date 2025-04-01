@@ -437,7 +437,7 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
         )
         if message and message.message_id:
             current_message_id = message.message_id
-            logger.info("send_question: Message sent successfully")
+            logger.info("send_question: Message sent successfully, message_id: {current_message_id}")
         else:
             logger.info("send_question: Message sending failed")
     except Exception as e:
