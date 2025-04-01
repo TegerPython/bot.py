@@ -40,18 +40,11 @@ leaderboard = {}
 current_question = None
 current_message_id = None
 user_answers = {}
-weekly_questions = []
-weekly_question_index = 0
-weekly_poll_message_ids = []
-weekly_user_answers = {}
 answered_users = set()
-used_weekly_questions = set()
 
 # Load Questions from URL
-# At the top of your script, add:
 DEBUG = True  # Set to True for extra debugging
 
-# In your load_questions function, add:
 def load_questions():
     global questions
     try:
@@ -78,7 +71,7 @@ def load_questions():
                 pass
     except Exception as e:
         logger.error(f"Error loading questions: {e}")
-# Load Leaderboard from URL
+
 def load_leaderboard():
     global leaderboard
     try:
@@ -93,7 +86,6 @@ def load_leaderboard():
     except Exception as e:
         logger.error(f"Error loading leaderboard: {e}")
 
-# Load Weekly Questions from URL
 def load_weekly_questions():
     global weekly_questions
     try:
@@ -387,11 +379,91 @@ async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         weekly_test.channel_message_ids.append(channel_message.message_id)
         
         await update.message.reply_text("🚀 Starting weekly test...")
-        await send_question(context, 0)
+        await send_weekly_question(context, 0)
         
     except Exception as e:
         logger.error(f"Error starting test: {e}")
         await update.message.reply_text(f"❌ Failed to start: {str(e)}")
+
+async def send_weekly_question(context, question_index):
+    """Send question to group and announcement to channel"""
+    global weekly_test, used_weekly_questions
+    
+    if not weekly_test.active or question_index >= len(weekly_test.questions):
+        if weekly_test.active:
+            await send_leaderboard_results(context)
+        return
+
+    question = weekly_test.questions[question_index]
+    weekly_test.current_question_index = question_index
+    used_weekly_questions.add(question.get("id", question_index))  # Use index if id is not present
+    
+    try:
+        # Restrict messaging during quiz
+        await context.bot.set_chat_permissions(
+            DISCUSSION_GROUP_ID,
+            permissions={"can_send_messages": False}
+        )
+        
+        # Send poll to group
+        group_message = await context.bot.send_poll(
+            chat_id=DISCUSSION_GROUP_ID,
+            question=f"❓ Question {question_index + 1}: {question['question']}",
+            options=question["options"],
+            is_anonymous=False,
+            protect_content=True,
+            allows_multiple_answers=False,
+            open_period=QUESTION_DURATION
+        )
+        
+        # Store poll info
+        weekly_test.poll_ids[question_index] = group_message.poll.id
+        weekly_test.poll_messages[question_index] = group_message.message_id
+        
+        # Prepare channel message with dynamic timing
+        time_emoji = "⏱️"
+        if QUESTION_DURATION <= 10:
+            time_emoji = "🚨"
+        elif QUESTION_DURATION <= 20:
+            time_emoji = "⏳"
+        
+        # Send channel announcement
+        channel_message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=f"🎯 *QUESTION {question_index + 1} IS LIVE!* 🎯\n\n"
+                 f"{time_emoji} *Hurry!* Only {QUESTION_DURATION} seconds to answer!\n"
+                 f"💡 Test your knowledge and earn points!\n\n",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("𝗘𝗡╸📝 Join Discussion", url=weekly_test.group_link)]
+            ])
+        )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
+        
+        # Schedule next question or leaderboard
+        if question_index + 1 < min(len(weekly_test.questions), MAX_QUESTIONS):
+            context.job_queue.run_once(
+                lambda ctx: asyncio.create_task(send_weekly_question(ctx, question_index + 1)),
+                QUESTION_DURATION + NEXT_QUESTION_DELAY, 
+                name="next_question"
+            )
+        else:
+            context.job_queue.run_once(
+                lambda ctx: asyncio.create_task(send_leaderboard_results(ctx)),
+                QUESTION_DURATION + 5, 
+                name="send_leaderboard"
+            )
+        
+        # Schedule poll closure and answer reveal
+        context.job_queue.run_once(
+            lambda ctx: asyncio.create_task(stop_poll_and_check_answers(ctx, question_index)),
+            QUESTION_DURATION, 
+            name=f"stop_poll_{question_index}"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error sending question {question_index + 1}: {e}")
+
 async def stop_poll_and_check_answers(context, question_index):
     """Handle poll closure and reveal answer"""
     global weekly_test
@@ -415,8 +487,6 @@ async def stop_poll_and_check_answers(context, question_index):
 
 async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle poll answers from group members"""
-    global weekly_test
-    
     try:
         if not weekly_test.active:
             return
@@ -511,46 +581,6 @@ async def create_countdown_teaser(context):
             ])
         )
         weekly_test.channel_message_ids.append(message.message_id)
-
-# Make sure this is at the same indentation level as your other functions
-async def debug_env(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-    
-    # Check key environment variables
-    debug_info = "🔍 Debug Information:\n\n"
-    debug_info += f"BOT_TOKEN: {'✅ Set' if BOT_TOKEN else '❌ Missing'}\n"
-    debug_info += f"CHANNEL_ID: {CHANNEL_ID}\n"
-    debug_info += f"OWNER_ID: {OWNER_ID}\n"
-    debug_info += f"DISCUSSION_GROUP_ID: {DISCUSSION_GROUP_ID}\n"
-    debug_info += f"QUESTIONS_JSON_URL: {QUESTIONS_JSON_URL}\n"
-    debug_info += f"Questions loaded: {len(questions)}\n"
-    debug_info += f"Current question: {'✅ Set' if current_question else '❌ None'}\n"
-    
-    await update.message.reply_text(debug_info)
-    
-async def force_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global current_question, current_message_id, answered_users
-    
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-    
-    if not questions:
-        await update.message.reply_text("❌ No questions loaded. Check JSON URL.")
-        return
-    
-    answered_users = set()
-    current_question = random.choice(questions)
-    
-    await update.message.reply_text(f"✅ Manually set current_question: {current_question.get('question')}")
-    
-# Add this to your command handlers
-application.add_handler(CommandHandler("forcequestion", force_question))
-
-# Add this to your command handlers
-application.add_handler(CommandHandler("debug", debug_env))
         
         # Create countdown job
         async def update_countdown(remaining_time):
@@ -622,7 +652,7 @@ async def start_quiz(context):
         weekly_test.channel_message_ids.append(channel_message.message_id)
         
         # Start first question
-        await send_question(context, 0)
+        await send_weekly_question(context, 0)
         
     except Exception as e:
         logger.error(f"Quiz start error: {e}")
@@ -689,6 +719,8 @@ def main():
     application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("test", test_question))
     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
+    application.add_handler(CommandHandler("forcequestion", force_question))
+    application.add_handler(CommandHandler("debug", debug_env))
     
     # Poll answer handler
     application.add_handler(PollAnswerHandler(handle_poll_answer))
