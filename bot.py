@@ -127,6 +127,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()  # Always answer the callback query
 
     if not query or not current_question:
+        logger.warning("handle_answer: query or current_question is None")
         return
 
     user_id = query.from_user.id
@@ -140,8 +141,9 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_answer = query.data.strip()
     correct_answer = current_question.get("correct_option", "").strip()
 
-    logger.info(f"User answer: '{user_answer}'")
-    logger.info(f"Correct answer: '{correct_answer}'")
+    logger.info(f"handle_answer: User answer: '{user_answer}'")
+    logger.info(f"handle_answer: Correct answer: '{correct_answer}'")
+    logger.info(f"handle_answer: user_id: '{user_id}'")
 
     correct = user_answer == correct_answer
 
@@ -165,8 +167,9 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=edited_text,
                 reply_markup=None  # Remove the inline keyboard
             )
+            logger.info("handle_answer: message edited successfully")
         except Exception as e:
-            logger.error(f"Failed to edit message: {e}")
+            logger.error(f"handle_answer: Failed to edit message: {e}")
     
     save_leaderboard()
 
