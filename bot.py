@@ -100,10 +100,19 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
     global current_question, answered_users, current_message_id
     answered_users = set()
     current_question = random.choice(questions)
+    if not current_question:
+        logger.error("send_question: Failed to select a question.")
+        return
+
+    # Log the selected question
+    logger.info(f"send_question: Selected question: {current_question}")
+
     keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in current_question.get("options", [])]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
+        # Log before sending the message
+        logger.info("send_question: Attempting to send question message to the channel.")
         message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text=current_question.get("question"),
@@ -113,10 +122,9 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
         )
         if message and message.message_id:
             current_message_id = message.message_id
-            logger.info("send_question: message sent successfully")
+            logger.info("send_question: Message sent successfully")
         else:
-            logger.info("send_question: message sending failed")
-
+            logger.info("send_question: Message sending failed")
     except Exception as e:
         logger.error(f"send_question: Failed to send question: {e}")
 
