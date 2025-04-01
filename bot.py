@@ -48,20 +48,36 @@ answered_users = set()
 used_weekly_questions = set()
 
 # Load Questions from URL
+# At the top of your script, add:
+DEBUG = True  # Set to True for extra debugging
+
+# In your load_questions function, add:
 def load_questions():
     global questions
     try:
+        if DEBUG:
+            logger.info(f"Attempting to load questions from {QUESTIONS_JSON_URL}")
         response = requests.get(QUESTIONS_JSON_URL)
+        if DEBUG:
+            logger.info(f"Response status: {response.status_code}")
         response.raise_for_status()
         questions = response.json()
+        if DEBUG:
+            logger.info(f"Questions loaded: {len(questions)}")
+            if questions:
+                logger.info(f"First question sample: {json.dumps(questions[0])[:200]}...")
         logger.info(f"Loaded {len(questions)} questions from {QUESTIONS_JSON_URL}")
     except requests.exceptions.RequestException as e:
         logger.error(f"Error fetching questions from {QUESTIONS_JSON_URL}: {e}")
-    except json.JSONDecodeError:
-        logger.error(f"Error decoding JSON from {QUESTIONS_JSON_URL}")
+    except json.JSONDecodeError as e:
+        logger.error(f"Error decoding JSON from {QUESTIONS_JSON_URL}: {e}")
+        if DEBUG:
+            try:
+                logger.error(f"Raw response: {response.text[:500]}...")
+            except:
+                pass
     except Exception as e:
         logger.error(f"Error loading questions: {e}")
-
 # Load Leaderboard from URL
 def load_leaderboard():
     global leaderboard
@@ -495,6 +511,46 @@ async def create_countdown_teaser(context):
             ])
         )
         weekly_test.channel_message_ids.append(message.message_id)
+
+        async def debug_env(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    
+    # Check key environment variables
+    debug_info = "🔍 Debug Information:\n\n"
+    debug_info += f"BOT_TOKEN: {'✅ Set' if BOT_TOKEN else '❌ Missing'}\n"
+    debug_info += f"CHANNEL_ID: {CHANNEL_ID}\n"
+    debug_info += f"OWNER_ID: {OWNER_ID}\n"
+    debug_info += f"DISCUSSION_GROUP_ID: {DISCUSSION_GROUP_ID}\n"
+    debug_info += f"QUESTIONS_JSON_URL: {QUESTIONS_JSON_URL}\n"
+    debug_info += f"Questions loaded: {len(questions)}\n"
+    debug_info += f"Current question: {'✅ Set' if current_question else '❌ None'}\n"
+    
+    await update.message.reply_text(debug_info)
+
+
+async def force_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global current_question, current_message_id, answered_users
+    
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    
+    if not questions:
+        await update.message.reply_text("❌ No questions loaded. Check JSON URL.")
+        return
+    
+    answered_users = set()
+    current_question = random.choice(questions)
+    
+    await update.message.reply_text(f"✅ Manually set current_question: {current_question.get('question')}")
+    
+# Add this to your command handlers
+application.add_handler(CommandHandler("forcequestion", force_question))
+
+# Add this to your command handlers
+application.add_handler(CommandHandler("debug", debug_env))
         
         # Create countdown job
         async def update_countdown(remaining_time):
