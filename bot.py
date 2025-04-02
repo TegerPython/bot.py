@@ -136,18 +136,6 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global answered_users, current_question, current_message_id, leaderboard
 
     query = update.callback_query
-    if not query:
-        logger.error("handle_answer: No query available.")
-        return
-    
-    await query.answer()  # Always answer the callback query
-
-    # Check if current_question exists
-    if current_question is None:
-        logger.error("handle_answer: No current question available.")
-        await query.answer("Sorry, no active question at the moment.", show_alert=True)
-        return
-
     user_id = query.from_user.id
     username = query.from_user.first_name
 
@@ -185,12 +173,10 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=edited_text,
                 reply_markup=None  # Remove the inline keyboard
             )
-            logger.info("handle_answer: Message edited successfully.")
         except Exception as e:
-            logger.error(f"handle_answer: Failed to edit message: {e}")
+            logger.error(f"Failed to edit message: {e}")
     else:
         await query.answer("❌ Incorrect.", show_alert=True)
-
     save_leaderboard()
 
 def save_leaderboard():
@@ -731,7 +717,7 @@ def main():
     # Schedule daily questions
     job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
     job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
-    job_queue.run_daily(send_question, get_utc_time(15, 37, "Asia/Gaza"), name="third_question")  # Set to 3:37 PM for testing
+    job_queue.run_daily(send_question, get_utc_time(15, 52, "Asia/Gaza"), name="third_question")  # Set to 3:52 PM for testing
 
     # Weekly test scheduling
     job_queue.run_once(
