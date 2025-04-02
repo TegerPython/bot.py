@@ -454,21 +454,11 @@ async def send_weekly_question(context, question_index):
         
         # Schedule next question or leaderboard
         if question_index + 1 < min(len(weekly_test.questions), MAX_QUESTIONS):
-            if question_index == 0:  # Schedule second question at 3:10 PM
-                gaza_tz = pytz.timezone('Asia/Gaza')
-                next_time = datetime.now(gaza_tz).replace(hour=15, minute=10, second=0, microsecond=0)
-                seconds_until_next = (next_time - datetime.now(gaza_tz)).total_seconds()
-                context.job_queue.run_once(
-                    lambda ctx: asyncio.create_task(send_weekly_question(ctx, question_index + 1)),
-                    seconds_until_next,
-                    name="next_question_310PM"
-                )
-            else:
-                context.job_queue.run_once(
-                    lambda ctx: asyncio.create_task(send_weekly_question(ctx, question_index + 1)),
-                    QUESTION_DURATION + NEXT_QUESTION_DELAY, 
-                    name="next_question"
-                )
+            context.job_queue.run_once(
+                lambda ctx: asyncio.create_task(send_weekly_question(ctx, question_index + 1)),
+                QUESTION_DURATION + NEXT_QUESTION_DELAY, 
+                name="next_question"
+            )
         else:
             context.job_queue.run_once(
                 lambda ctx: asyncio.create_task(send_leaderboard_results(ctx)),
@@ -728,8 +718,27 @@ async def debug_env(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(debug_info)
 
+def get_utc_time(hour, minute, timezone_str):
+    tz = pytz.timezone(timezone_str)
+    local_time = datetime.now(tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    utc_time = local_time.astimezone(pytz.utc).time()
+    return utc_time
+
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
+    job_queue = application.job_queue
+
+    # Schedule daily questions
+    job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
+    job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
+    job_queue.run_daily(send_question, get_utc_time(15, 37, "Asia/Gaza"), name="third_question")  # Set to 3:37 PM for testing
+
+    # Weekly test scheduling
+    job_queue.run_once(
+        lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
+        5,  # Initial delay to let the bot start
+        name="initial_schedule"
+    )
 
     # Command handlers
     application.add_handler(CallbackQueryHandler(handle_answer))
@@ -741,13 +750,6 @@ def main():
 
     # Poll answer handler
     application.add_handler(PollAnswerHandler(handle_poll_answer))
-
-    # Initial scheduling
-    application.job_queue.run_once(
-        lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
-        5,  # Initial delay to let the bot start
-        name="initial_schedule"
-    )
 
     # Start bot
     if WEBHOOK_URL:
