@@ -218,7 +218,7 @@ def save_leaderboard():
             "sha": sha,
             "branch": "main",  # Or your branch name
         }
-        update_response = requests.put(update_url, headers=headers, json=data)
+        update_response = requests.put(update_url, headers=headers, json(data))
         update_response.raise_for_status()
 
         logger.info("Leaderboard saved successfully to GitHub.")
@@ -454,11 +454,21 @@ async def send_weekly_question(context, question_index):
         
         # Schedule next question or leaderboard
         if question_index + 1 < min(len(weekly_test.questions), MAX_QUESTIONS):
-            context.job_queue.run_once(
-                lambda ctx: asyncio.create_task(send_weekly_question(ctx, question_index + 1)),
-                QUESTION_DURATION + NEXT_QUESTION_DELAY, 
-                name="next_question"
-            )
+            if question_index == 0:  # Schedule second question at 3:10 PM
+                gaza_tz = pytz.timezone('Asia/Gaza')
+                next_time = datetime.now(gaza_tz).replace(hour=15, minute=10, second=0, microsecond=0)
+                seconds_until_next = (next_time - datetime.now(gaza_tz)).total_seconds()
+                context.job_queue.run_once(
+                    lambda ctx: asyncio.create_task(send_weekly_question(ctx, question_index + 1)),
+                    seconds_until_next,
+                    name="next_question_310PM"
+                )
+            else:
+                context.job_queue.run_once(
+                    lambda ctx: asyncio.create_task(send_weekly_question(ctx, question_index + 1)),
+                    QUESTION_DURATION + NEXT_QUESTION_DELAY, 
+                    name="next_question"
+                )
         else:
             context.job_queue.run_once(
                 lambda ctx: asyncio.create_task(send_leaderboard_results(ctx)),
