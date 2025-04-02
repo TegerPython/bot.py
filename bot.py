@@ -42,6 +42,7 @@ current_message_id = None
 user_answers = {}
 answered_users = set()
 used_weekly_questions = set()
+used_daily_questions = set()  # Track used daily questions
 
 # Load Questions from URL
 DEBUG = True  # Set to True for extra debugging
@@ -106,12 +107,20 @@ load_leaderboard()
 load_weekly_questions()
 
 async def send_question(context: ContextTypes.DEFAULT_TYPE):
-    global current_question, answered_users, current_message_id
+    global current_question, answered_users, current_message_id, used_daily_questions
     answered_users = set()
     if not questions:
         logger.error("send_question: No questions available")
         return
-    current_question = random.choice(questions)
+
+    available_questions = [q for q in questions if q["id"] not in used_daily_questions]
+    if not available_questions:
+        logger.error("send_question: No available questions left to post")
+        return
+
+    current_question = available_questions[0]  # Pick the first available question
+    used_daily_questions.add(current_question["id"])
+
     keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in current_question.get("options", [])]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
