@@ -113,7 +113,7 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
         logger.error("send_question: No questions available")
         return
 
-    available_questions = [q for q in questions if q["id"] not in used_daily_questions]
+    available_questions = [q for q in questions if q["id"] not in used_daily_questions and q["id"] not in used_weekly_questions]
     if not available_questions:
         logger.error("send_question: No available questions left to post")
         return
@@ -164,8 +164,9 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if correct:
         await query.answer("✅ Correct!")
         if str(user_id) not in leaderboard:
-            leaderboard[str(user_id)] = {"username": username, "score": 0}
+            leaderboard[str(user_id)] = {"username": username, "score": 0, "total_questions": 0}
         leaderboard[str(user_id)]["score"] += 1
+        leaderboard[str(user_id)]["total_questions"] += 1
 
         explanation = current_question.get("explanation", "No explanation provided.")
         edited_text = (
@@ -186,6 +187,9 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Failed to edit message: {e}")
     else:
         await query.answer("❌ Incorrect.", show_alert=True)
+        if str(user_id) not in leaderboard:
+            leaderboard[str(user_id)] = {"username": username, "score": 0, "total_questions": 0}
+        leaderboard[str(user_id)]["total_questions"] += 1
     save_leaderboard()
 
 def save_leaderboard():
@@ -232,7 +236,7 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Ensure the current question is set properly
     global current_question, current_message_id, answered_users, used_daily_questions
     answered_users = set()
-    available_questions = [q for q in questions if q["id"] not in used_daily_questions]
+    available_questions = [q for q in questions if q["id"] not in used_daily_questions and q["id"] not in used_weekly_questions]
     if not available_questions:
         await update.message.reply_text("❌ No available questions left to post")
         return
@@ -369,7 +373,7 @@ async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
             
         weekly_test.reset()
-        weekly_test.questions = [q for q in questions if q.get("id") not in used_weekly_questions]
+        weekly_test.questions = [q for q in questions if q.get("id") not in used_weekly_questions and q.get("id") not in used_daily_questions]
         if not weekly_test.questions:
             await update.message.reply_text("❌ No new questions available for the weekly quiz")
             return
@@ -400,7 +404,7 @@ async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def send_weekly_question(context, question_index):
     """Send question to group and announcement to channel"""
-    global weekly_test, used_weekly_questions
+    global weekly_test, used_weekly_questions, used_daily_questions
     
     if not weekly_test.active or question_index >= len(weekly_test.questions):
         if weekly_test.active:
@@ -545,8 +549,9 @@ async def send_leaderboard_results(context):
                 message += f"{i}. {data['name']} - {data['score']} pts\n"
             # Add weekly scores to main leaderboard
             if str(user_id) not in leaderboard:
-                leaderboard[str(user_id)] = {"username": data["name"], "score": 0}
+                leaderboard[str(user_id)] = {"username": data["name"], "score": 0, "total_questions": 0}
             leaderboard[str(user_id)]["score"] += data["score"]
+            leaderboard[str(user_id)]["total_questions"] += data["score"]  # Update total questions
     else:
         message += "No participants this week."
 
@@ -639,7 +644,7 @@ async def start_quiz(context):
 
         # Reset test and set questions
         weekly_test.reset()
-        weekly_test.questions = [q for q in questions if q.get("id") not in used_weekly_questions]
+        weekly_test.questions = [q for q in questions if q.get("id") not in used_weekly_questions and q.get("id") not in used_daily_questions]
         if not weekly_test.questions:
             logger.error("No new questions available for the weekly quiz")
             return
@@ -779,7 +784,9 @@ async def handle_stats_callback(update: Update, context: ContextTypes.DEFAULT_TY
         leaderboard_text = "🏆 *Global Leaderboard* 🏆\n\n"
         for rank, (user_id, player) in enumerate(sorted_leaderboard, start=1):
             leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
-        await query.edit_message_text(leaderboard_text, parse_mode="Markdown")
+        keyboard = [[InlineKeyboardButton("Back", callback_data="back_to_stats_menu")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(leaderboard_text, parse_mode="Markdown", reply_markup=reply_markup)
 
     elif query.data == "my_stats":
         user_data = leaderboard[user_id]
