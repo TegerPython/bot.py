@@ -735,7 +735,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
     keyboard = [
         [InlineKeyboardButton("🌐 Global Score", callback_data="global_score")],
         [InlineKeyboardButton("📊 My Stats", callback_data="my_stats")],
