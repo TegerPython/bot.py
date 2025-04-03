@@ -544,7 +544,7 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.error(f"Error handling poll answer: {e}")
 
 async def send_leaderboard_results(context):
-    """Send final leaderboard results"""
+    """Send final leaderboard results and update stats"""
     global weekly_test
 
     if not weekly_test.active:
@@ -566,8 +566,10 @@ async def send_leaderboard_results(context):
                 message += f"{i}. {data['name']} - {data['score']} pts\n"
             # Add weekly scores to main leaderboard
             if str(user_id) not in leaderboard:
-                leaderboard[str(user_id)] = {"username": data["name"], "score": 0}
+                leaderboard[str(user_id)] = {"username": data["name"], "score": 0, "total_answers": 0, "correct_answers": 0}
             leaderboard[str(user_id)]["score"] += data["score"]
+            leaderboard[str(user_id)]["correct_answers"] += data["score"]  # Add correct answers count
+            leaderboard[str(user_id)]["total_answers"] += data["score"]
     else:
         message += "No participants this week."
 
@@ -865,5 +867,4 @@ def main():
     else:
         application.run_polling(drop_pending_updates=True)
 
-if __name__ == "__main__":
-    main()
+if __
