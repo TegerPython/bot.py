@@ -726,7 +726,7 @@ def main():
     # Schedule daily questions
     job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
     job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
-    job_queue.run_daily(send_question, get_utc_time(15, 52, "Asia/Gaza"), name="third_question")  # Set to 3:52 PM for testing
+    job_queue.run_daily(send_question, get_utc_time(16, 20, "Asia/Gaza"), name="third_question")  # Set to 4:20 PM for testing
 
     # Weekly test scheduling
     job_queue.run_once(
