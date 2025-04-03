@@ -113,7 +113,7 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
         logger.error("send_question: No questions available")
         return
 
-    available_questions = [q for q in questions if q["id"] not in used_daily_questions and q["id"] not in used_weekly_questions]
+    available_questions = [q for q in questions if q["id"] not in used_daily_questions]
     if not available_questions:
         logger.error("send_question: No available questions left to post")
         return
@@ -164,9 +164,8 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if correct:
         await query.answer("✅ Correct!")
         if str(user_id) not in leaderboard:
-            leaderboard[str(user_id)] = {"username": username, "score": 0, "total_questions": 0}
+            leaderboard[str(user_id)] = {"username": username, "score": 0}
         leaderboard[str(user_id)]["score"] += 1
-        leaderboard[str(user_id)]["total_questions"] += 1
 
         explanation = current_question.get("explanation", "No explanation provided.")
         edited_text = (
@@ -187,9 +186,6 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Failed to edit message: {e}")
     else:
         await query.answer("❌ Incorrect.", show_alert=True)
-        if str(user_id) not in leaderboard:
-            leaderboard[str(user_id)] = {"username": username, "score": 0, "total_questions": 0}
-        leaderboard[str(user_id)]["total_questions"] += 1
     save_leaderboard()
 
 def save_leaderboard():
@@ -234,16 +230,10 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Ensure the current question is set properly
-    global current_question, current_message_id, answered_users, used_daily_questions
+    global current_question, current_message_id, answered_users
     answered_users = set()
-    available_questions = [q for q in questions if q["id"] not in used_daily_questions and q["id"] not in used_weekly_questions]
-    if not available_questions:
-        await update.message.reply_text("❌ No available questions left to post")
-        return
-
-    current_question = available_questions[0]  # Pick the first available question
-    used_daily_questions.add(current_question["id"])
-
+    current_question = random.choice(questions)
+    
     try:
         keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in current_question.get("options", [])]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -373,7 +363,7 @@ async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
             
         weekly_test.reset()
-        weekly_test.questions = [q for q in questions if q.get("id") not in used_weekly_questions and q.get("id") not in used_daily_questions]
+        weekly_test.questions = [q for q in questions if q.get("id") not in used_weekly_questions]
         if not weekly_test.questions:
             await update.message.reply_text("❌ No new questions available for the weekly quiz")
             return
@@ -404,7 +394,7 @@ async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def send_weekly_question(context, question_index):
     """Send question to group and announcement to channel"""
-    global weekly_test, used_weekly_questions, used_daily_questions
+    global weekly_test, used_weekly_questions
     
     if not weekly_test.active or question_index >= len(weekly_test.questions):
         if weekly_test.active:
@@ -549,9 +539,8 @@ async def send_leaderboard_results(context):
                 message += f"{i}. {data['name']} - {data['score']} pts\n"
             # Add weekly scores to main leaderboard
             if str(user_id) not in leaderboard:
-                leaderboard[str(user_id)] = {"username": data["name"], "score": 0, "total_questions": 0}
+                leaderboard[str(user_id)] = {"username": data["name"], "score": 0}
             leaderboard[str(user_id)]["score"] += data["score"]
-            leaderboard[str(user_id)]["total_questions"] += data["score"]  # Update total questions
     else:
         message += "No participants this week."
 
@@ -644,7 +633,7 @@ async def start_quiz(context):
 
         # Reset test and set questions
         weekly_test.reset()
-        weekly_test.questions = [q for q in questions if q.get("id") not in used_weekly_questions and q.get("id") not in used_daily_questions]
+        weekly_test.questions = [q for q in questions if q.get("id") not in used_weekly_questions]
         if not weekly_test.questions:
             logger.error("No new questions available for the weekly quiz")
             return
@@ -724,105 +713,6 @@ async def debug_env(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(debug_info)
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = (
-        "📋 *Quiz Bot Help* 📋\n\n"
-        "*Daily Questions:*\n"
-        "- Three questions are posted daily at 8:00 AM, 12:30 PM, and 4:20 PM (Gaza time).\n\n"
-        "*Weekly Quiz:*\n"
-        "- The weekly quiz is held every Friday at 6:00 PM (Gaza time).\n"
-        "- Join the discussion group to participate.\n\n"
-        "*Points System:*\n"
-        "- Daily questions earn you points that accumulate over the month.\n"
-        "- Weekly quiz points are reset weekly but added to your monthly total.\n\n"
-        "*Commands:*\n"
-        "- /test: Send a test question (admin only).\n"
-        "- /weeklytest: Start the weekly test (admin only).\n"
-        "- /leaderboard: Show the global leaderboard.\n"
-        "- /stats: Show your stats and global score.\n"
-        "- /help: Show this help message.\n"
-    )
-    await update.message.reply_text(help_text, parse_mode="Markdown")
-
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    username = update.effective_user.first_name
-
-    if user_id not in leaderboard:
-        await update.message.reply_text("❌ You have not answered any questions yet.")
-        return
-
-    user_data = leaderboard[user_id]
-    total_questions = user_data.get("total_questions", 0)
-    correct_answers = user_data.get("score", 0)
-    incorrect_answers = total_questions - correct_answers
-
-    sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
-    rank = next((i for i, (uid, data) in enumerate(sorted_leaderboard, start=1) if uid == user_id), None)
-
-    keyboard = [
-        [InlineKeyboardButton("Global Score", callback_data="global_score")],
-        [InlineKeyboardButton("My Stats", callback_data="my_stats")],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_text(
-        "📊 *Stats Menu* 📊\n"
-        "- *Global Score*: View the overall score of all players.\n"
-        "- *My Stats*: View detailed stats about your progress.",
-        parse_mode="Markdown",
-        reply_markup=reply_markup
-    )
-
-async def handle_stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = str(query.from_user.id)
-    username = query.from_user.first_name
-
-    if query.data == "global_score":
-        sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
-        leaderboard_text = "🏆 *Global Leaderboard* 🏆\n\n"
-        for rank, (user_id, player) in enumerate(sorted_leaderboard, start=1):
-            leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
-        keyboard = [[InlineKeyboardButton("Back", callback_data="back_to_stats_menu")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(leaderboard_text, parse_mode="Markdown", reply_markup=reply_markup)
-
-    elif query.data == "my_stats":
-        user_data = leaderboard[user_id]
-        total_questions = user_data.get("total_questions", 0)
-        correct_answers = user_data.get("score", 0)
-        incorrect_answers = total_questions - correct_answers
-
-        sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
-        rank = next((i for i, (uid, data) in enumerate(sorted_leaderboard, start=1) if uid == user_id), None)
-
-        stats_text = (
-            f"📊 *Your Stats* 📊\n\n"
-            f"👤 *Username*: {username}\n"
-            f"🏅 *Rank*: {rank}\n"
-            f"❓ *Total Questions Answered*: {total_questions}\n"
-            f"✅ *Correct Answers*: {correct_answers}\n"
-            f"❌ *Incorrect Answers*: {incorrect_answers}\n"
-        )
-        keyboard = [[InlineKeyboardButton("Back", callback_data="back_to_stats_menu")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(stats_text, parse_mode="Markdown", reply_markup=reply_markup)
-
-    elif query.data == "back_to_stats_menu":
-        keyboard = [
-            [InlineKeyboardButton("Global Score", callback_data="global_score")],
-            [InlineKeyboardButton("My Stats", callback_data="my_stats")],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
-            "📊 *Stats Menu* 📊\n"
-            "- *Global Score*: View the overall score of all players.\n"
-            "- *My Stats*: View detailed stats about your progress.",
-            parse_mode="Markdown",
-            reply_markup=reply_markup
-        )
-
 def get_utc_time(hour, minute, timezone_str):
     tz = pytz.timezone(timezone_str)
     local_time = datetime.now(tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -852,14 +742,9 @@ def main():
     application.add_handler(CommandHandler("test", test_question))
     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
     application.add_handler(CommandHandler("debug", debug_env))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("stats", stats_command))
 
     # Poll answer handler
     application.add_handler(PollAnswerHandler(handle_poll_answer))
-
-    # Add callback query handler for stats
-    application.add_handler(CallbackQueryHandler(handle_stats_callback))
 
     # Start bot
     if WEBHOOK_URL:
