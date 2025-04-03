@@ -719,56 +719,6 @@ async def debug_env(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(debug_info)
 
-def get_utc_time(hour, minute, timezone_str):
-    tz = pytz.timezone(timezone_str)
-    local_time = datetime.now(tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
-    utc_time = local_time.astimezone(pytz.utc).time()
-    return utc_time
-
-def main():
-    application = Application.builder().token(BOT_TOKEN).build()
-    job_queue = application.job_queue
-
-    # Schedule daily questions
-    job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
-    job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
-    job_queue.run_daily(send_question, get_utc_time(16, 20, "Asia/Gaza"), name="third_question")  # Set to 4:20 PM for testing
-
-    # Weekly test scheduling
-    job_queue.run_once(
-        lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
-        5,  # Initial delay to let the bot start
-        name="initial_schedule"
-    )
-
-    # Command handlers
-    application.add_handler(CallbackQueryHandler(handle_answer))
-    application.add_handler(CommandHandler("start", start_test_command))
-    application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("test", test_question))
-    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
-    application.add_handler(CommandHandler("debug", debug_env))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("stats", stats_command))
-
-    # Poll answer handler
-    application.add_handler(PollAnswerHandler(handle_poll_answer))
-
-    # Start bot
-    if WEBHOOK_URL:
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=BOT_TOKEN,
-            webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-            drop_pending_updates=True
-        )
-    else:
-        application.run_polling(drop_pending_updates=True)
-
-if __name__ == "__main__":
-    main()
-
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "📋 *Quiz Bot Help* 📋\n\n"
@@ -866,5 +816,55 @@ async def handle_stats_callback(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=reply_markup
         )
 
-# Add callback query handler for stats
-application.add_handler(CallbackQueryHandler(handle_stats_callback))
+def get_utc_time(hour, minute, timezone_str):
+    tz = pytz.timezone(timezone_str)
+    local_time = datetime.now(tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    utc_time = local_time.astimezone(pytz.utc).time()
+    return utc_time
+
+def main():
+    application = Application.builder().token(BOT_TOKEN).build()
+    job_queue = application.job_queue
+
+    # Schedule daily questions
+    job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
+    job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
+    job_queue.run_daily(send_question, get_utc_time(16, 20, "Asia/Gaza"), name="third_question")  # Set to 4:20 PM for testing
+
+    # Weekly test scheduling
+    job_queue.run_once(
+        lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
+        5,  # Initial delay to let the bot start
+        name="initial_schedule"
+    )
+
+    # Command handlers
+    application.add_handler(CallbackQueryHandler(handle_answer))
+    application.add_handler(CommandHandler("start", start_test_command))
+    application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("test", test_question))
+    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
+    application.add_handler(CommandHandler("debug", debug_env))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("stats", stats_command))
+
+    # Poll answer handler
+    application.add_handler(PollAnswerHandler(handle_poll_answer))
+
+    # Add callback query handler for stats
+    application.add_handler(CallbackQueryHandler(handle_stats_callback))
+
+    # Start bot
+    if WEBHOOK_URL:
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=BOT_TOKEN,
+            webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+            drop_pending_updates=True
+        )
+    else:
+        application.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
