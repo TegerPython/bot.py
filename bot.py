@@ -121,7 +121,7 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
     current_question = available_questions[0]  # Pick the first available question
     used_daily_questions.add(current_question["id"])
 
-    keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in current_question.get("options", [])]
+    keyboard = [[InlineKeyboardButton(option, callback_data=f"answer_{option}")] for option in current_question.get("options", [])]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
@@ -157,7 +157,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     answered_users.add(user_id)
-    user_answer = query.data.strip()
+    user_answer = query.data.replace("answer_", "").strip()
     correct_answer = current_question.get("correct_option", "").strip()
 
     logger.info(f"User answer: '{user_answer}'")
@@ -168,8 +168,9 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if correct:
         await query.answer("✅ Correct!")
         if str(user_id) not in leaderboard:
-            leaderboard[str(user_id)] = {"username": username, "score": 0}
+            leaderboard[str(user_id)] = {"username": username, "score": 0, "total_answers": 0, "correct_answers": 0}
         leaderboard[str(user_id)]["score"] += 1
+        leaderboard[str(user_id)]["correct_answers"] += 1
 
         explanation = current_question.get("explanation", "No explanation provided.")
         edited_text = (
@@ -190,6 +191,8 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Failed to edit message: {e}")
     else:
         await query.answer("❌ Incorrect.", show_alert=True)
+
+    leaderboard[str(user_id)]["total_answers"] += 1
     save_leaderboard()
 
 def save_leaderboard():
@@ -239,7 +242,7 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_question = random.choice(questions)
     
     try:
-        keyboard = [[InlineKeyboardButton(option, callback_data=option)] for option in current_question.get("options", [])]
+        keyboard = [[InlineKeyboardButton(option, callback_data=f"answer_{option}")] for option in current_question.get("options", [])]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         message = await context.bot.send_message(
@@ -736,9 +739,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("🌐 Global Score", callback_data="global_score")],
-        [InlineKeyboardButton("📊 My Stats", callback_data="my_stats")],
-        [InlineKeyboardButton("🔙 Back", callback_data="back")],
+        [InlineKeyboardButton("🌐 Global Score", callback_data="stats_global_score")],
+        [InlineKeyboardButton("📊 My Stats", callback_data="stats_my_stats")],
+        [InlineKeyboardButton("🔙 Back", callback_data="stats_back")],
     ]
 
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -754,16 +757,16 @@ async def handle_stats_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = str(query.from_user.id)
     data = query.data
 
-    if data == "global_score":
+    if data == "stats_global_score":
         sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
         leaderboard_text = "🌐 *Global Leaderboard* 🌐\n\n"
         for rank, (user_id, player) in enumerate(sorted_leaderboard, start=1):
             leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
         await query.edit_message_text(leaderboard_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Back", callback_data="back")],
+            [InlineKeyboardButton("🔙 Back", callback_data="stats_back")],
         ]))
 
-    elif data == "my_stats":
+    elif data == "stats_my_stats":
         if user_id in leaderboard:
             player = leaderboard[user_id]
             total_answers = player.get("total_answers", 0)
@@ -781,10 +784,10 @@ async def handle_stats_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
         else:
             stats_text = "❌ You have not answered any questions yet."
         await query.edit_message_text(stats_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Back", callback_data="back")],
+            [InlineKeyboardButton("🔙 Back", callback_data="stats_back")],
         ]))
 
-    elif data == "back":
+    elif data == "stats_back":
         await stats_command(update, context)
 
 def get_utc_time(hour, minute, timezone_str):
@@ -810,7 +813,7 @@ def main():
     )
 
     # Command handlers
-    application.add_handler(CallbackQueryHandler(handle_answer))
+    application.add_handler(CallbackQueryHandler(handle_answer, pattern="^answer_"))
     application.add_handler(CommandHandler("start", start_test_command))
     application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("test", test_question))
@@ -818,7 +821,7 @@ def main():
     application.add_handler(CommandHandler("debug", debug_env))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("stats", stats_command))
-    application.add_handler(CallbackQueryHandler(handle_stats_buttons, pattern="^(global_score|my_stats|back)$"))
+    application.add_handler(CallbackQueryHandler(handle_stats_buttons, pattern="^(stats_global_score|stats_my_stats|stats_back)$"))
 
     # Poll answer handler
     application.add_handler(PollAnswerHandler(handle_poll_answer))
