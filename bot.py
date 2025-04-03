@@ -788,7 +788,7 @@ async def handle_stats_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
         ]))
 
     elif data == "stats_back":
-        await query.message.reply_text(
+        await query.edit_message_text(
             "📈 *Statistics Menu* 📈\n\n"
             "Choose an option below to view your quiz statistics:",
             reply_markup=InlineKeyboardMarkup([
