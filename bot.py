@@ -41,10 +41,6 @@ current_question = None
 current_message_id = None
 user_answers = {}
 answered_users = set()
-weekly_questions = []
-weekly_question_index = 0
-weekly_poll_message_ids = []
-weekly_user_answers = {}
 used_weekly_questions = set()
 used_daily_questions = set()  # Track used daily questions
 
