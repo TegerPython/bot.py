@@ -841,11 +841,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "- Hosts a weekly quiz every Friday at 6:00 PM (Gaza time).\n"
         "- Tracks your answers and scores to keep you motivated.\n\n"
         "📢 *Groups:*\n"
-        "Join our discussion group to participate in quizzes and interact with other members. "
-        "Use the following link to join: [Discussion Group](https://t.me/joinchat/XXXXXX)\n\n"
-        "For more commands and information, use /help."
+        "Join our groups to participate in quizzes and interact with other members."
     )
-    await update.message.reply_text(start_text, parse_mode="Markdown")
+
+    keyboard = [
+        [InlineKeyboardButton("🌿 Study with Beem | English 🌿", url="https://t.me/StudyEnglishWithBeem")],
+        [InlineKeyboardButton("📖 Beem Academy | English 🎓", url="https://t.me/EnglishBeemAcademy")],
+        [InlineKeyboardButton("/help", callback_data="help_command")]
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(start_text, parse_mode="Markdown", reply_markup=reply_markup)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
