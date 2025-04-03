@@ -224,7 +224,7 @@ def save_leaderboard():
             "sha": sha,
             "branch": "main",  # Or your branch name
         }
-        update_response = requests.put(update_url, headers=headers, json=data)
+        update_response = requests.put(update_url, headers=headers, json(data))
         update_response.raise_for_status()
 
         logger.info("Leaderboard saved successfully to GitHub.")
@@ -269,7 +269,7 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
-    now = datetime.now().strftime("%Y-%m-%d %S:%M:%S")
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
 
 async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -803,7 +803,7 @@ async def handle_stats_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
 
 def get_utc_time(hour, minute, timezone_str):
     tz = pytz.timezone(timezone_str)
-    local_time = datetime.now(tz).replace(hour, minute, second=0, microsecond=0)
+    local_time = datetime.now(tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
     utc_time = local_time.astimezone(pytz.utc).time()
     return utc_time
 
