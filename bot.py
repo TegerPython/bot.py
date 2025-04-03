@@ -41,6 +41,10 @@ current_question = None
 current_message_id = None
 user_answers = {}
 answered_users = set()
+weekly_questions = []
+weekly_question_index = 0
+weekly_poll_message_ids = []
+weekly_user_answers = {}
 used_weekly_questions = set()
 used_daily_questions = set()  # Track used daily questions
 
@@ -265,7 +269,7 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now().strftime("%Y-%m-%d %S:%M:%S")
     await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
 
 async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -741,7 +745,6 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🌐 Global Score", callback_data="stats_global_score")],
         [InlineKeyboardButton("📊 My Stats", callback_data="stats_my_stats")],
-        [InlineKeyboardButton("🔙 Back", callback_data="stats_back")],
     ]
 
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -794,14 +797,13 @@ async def handle_stats_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🌐 Global Score", callback_data="stats_global_score")],
                 [InlineKeyboardButton("📊 My Stats", callback_data="stats_my_stats")],
-                [InlineKeyboardButton("🔙 Back", callback_data="stats_back")],
             ]),
             parse_mode="Markdown"
         )
 
 def get_utc_time(hour, minute, timezone_str):
     tz = pytz.timezone(timezone_str)
-    local_time = datetime.now(tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    local_time = datetime.now(tz).replace(hour, minute, second=0, microsecond=0)
     utc_time = local_time.astimezone(pytz.utc).time()
     return utc_time
 
