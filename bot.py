@@ -194,6 +194,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     leaderboard[str(user_id)]["total_answers"] += 1
     save_leaderboard()
+    
 
 def save_leaderboard():
     try:
