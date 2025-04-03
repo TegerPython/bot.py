@@ -788,7 +788,16 @@ async def handle_stats_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
         ]))
 
     elif data == "stats_back":
-        await stats_command(update, context)
+        await query.message.reply_text(
+            "📈 *Statistics Menu* 📈\n\n"
+            "Choose an option below to view your quiz statistics:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🌐 Global Score", callback_data="stats_global_score")],
+                [InlineKeyboardButton("📊 My Stats", callback_data="stats_my_stats")],
+                [InlineKeyboardButton("🔙 Back", callback_data="stats_back")],
+            ]),
+            parse_mode="Markdown"
+        )
 
 def get_utc_time(hour, minute, timezone_str):
     tz = pytz.timezone(timezone_str)
