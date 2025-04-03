@@ -170,6 +170,10 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if str(user_id) not in leaderboard:
             leaderboard[str(user_id)] = {"username": username, "score": 0, "total_answers": 0, "correct_answers": 0}
         leaderboard[str(user_id)]["score"] += 1
+        
+        # Check if correct_answers key exists before incrementing
+        if "correct_answers" not in leaderboard[str(user_id)]:
+            leaderboard[str(user_id)]["correct_answers"] = 0
         leaderboard[str(user_id)]["correct_answers"] += 1
 
         explanation = current_question.get("explanation", "No explanation provided.")
@@ -192,9 +196,12 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await query.answer("❌ Incorrect.", show_alert=True)
 
+    # Check if total_answers key exists before incrementing
+    if "total_answers" not in leaderboard[str(user_id)]:
+        leaderboard[str(user_id)]["total_answers"] = 0
     leaderboard[str(user_id)]["total_answers"] += 1
-    save_leaderboard()
     
+    save_leaderboard()
 
 def save_leaderboard():
     try:
