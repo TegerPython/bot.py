@@ -469,7 +469,7 @@ async def send_weekly_question(context, question_index):
                  f"💡 Test your knowledge and earn poínts!\n\n",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("𝗘𝗡╸📖 Beem Academy | English 🎓", url=weekly_test.group_link)]
+                [InlineKeyboardButton("📖 Beem Academy | English 🎓", url=weekly_test.group_link)]
             ])
         )
         weekly_test.channel_message_ids.append(channel_message.message_id)
