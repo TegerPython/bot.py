@@ -80,6 +80,18 @@ def load_leaderboard():
         response = requests.get(LEADERBOARD_JSON_URL)
         response.raise_for_status()
         leaderboard = response.json()
+        
+        # Ensure all required keys exist in each entry
+        for user_id, data in leaderboard.items():
+            if "username" not in data:
+                data["username"] = f"User {user_id}"
+            if "score" not in data:
+                data["score"] = 0
+            if "total_answers" not in data:
+                data["total_answers"] = 0
+            if "correct_answers" not in data:
+                data["correct_answers"] = 0
+                
         logger.info(f"Loaded leaderboard from {LEADERBOARD_JSON_URL}")
     except requests.exceptions.RequestException as e:
         logger.error(f"Error fetching leaderboard from {LEADERBOARD_JSON_URL}: {e}")
