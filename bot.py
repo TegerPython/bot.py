@@ -404,7 +404,7 @@ async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text="📢 *Weekly Test Starting Now!*\n"
-                 "Join the Discussion group to participate!...",
+                 "Join 📖 Beem Academy | English 🎓 to partícipate!...",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
