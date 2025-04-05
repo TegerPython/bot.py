@@ -241,7 +241,7 @@ def save_leaderboard():
             "sha": sha,
             "branch": "main",  # Or your branch name
         }
-        update_response = requests.put(update_url, headers=headers, json(data)
+        update_response = requests.put(update_url, headers=headers, json=data)
         update_response.raise_for_status()
 
         logger.info("Leaderboard saved successfully to GitHub.")
@@ -713,7 +713,7 @@ async def schedule_weekly_test(context):
         if days_until_friday == 0 and now.hour >= 18:
             days_until_friday = 7
 
-        next_friday = now + timedelta(days_until_friday)
+        next_friday = now + timedelta(days=days_until_friday)
         next_friday = next_friday.replace(hour=18, minute=0, second=0, microsecond=0)
 
         # Calculate time for teaser (30 minutes before quiz)
@@ -835,7 +835,6 @@ def get_utc_time(hour, minute, timezone_str):
     utc_time = local_time.astimezone(pytz.utc).time()
     return utc_time
 
-python name=bot.py
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     job_queue = application.job_queue
