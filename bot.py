@@ -936,13 +936,6 @@ def get_utc_time(hour, minute, timezone_str):
     utc_time = local_time.astimezone(pytz.utc).time()
     return utc_time
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the /start command."""
-    await update.message.reply_text(
-        "Welcome to the Quiz Bot! This bot posts daily questions and weekly tests.\n\n"
-        "Type /help to see available commands."
-    )
-
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     job_queue = application.job_queue
