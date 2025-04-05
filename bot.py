@@ -22,16 +22,12 @@ logger.info(f"BOT_TOKEN: {BOT_TOKEN}")
 
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
-SECOND_OWNER_ID = os.getenv("SECOND_OWNER_ID")
-if SECOND_OWNER_ID is None:
-    raise ValueError("Environment variable SECOND_OWNER_ID is not set")
-SECOND_OWNER = int(SECOND_OWNER_ID)
+SECOND_OWNER = int(os.getenv("SECOND_OWNER"))
 DISCUSSION_GROUP_ID = int(os.getenv("DISCUSSION_GROUP_ID", "0"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
 LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
 WEEKLY_QUESTIONS_JSON_URL = os.getenv("WEEKLY_QUESTIONS_JSON_URL")
-ENGLISH_NOTES_JSON_URL = os.getenv("ENGLISH_NOTES_JSON_URL")  # URL for English notes
 PORT = int(os.getenv("PORT", "5000"))
 
 # Constants
@@ -48,7 +44,6 @@ user_answers = {}
 answered_users = set()
 used_weekly_questions = set()
 used_daily_questions = set()  # Track used daily questions
-english_notes = []  # List to store English notes
 
 # Load Questions from URL
 DEBUG = True  # Set to True for extra debugging
@@ -120,24 +115,9 @@ def load_weekly_questions():
     except Exception as e:
         logger.error(f"Error loading weekly questions: {e}")
 
-def load_english_notes():
-    global english_notes
-    try:
-        response = requests.get(ENGLISH_NOTES_JSON_URL)
-        response.raise_for_status()
-        english_notes = response.json().get("notes", [])
-        logger.info(f"Loaded {len(english_notes)} English notes from {ENGLISH_NOTES_JSON_URL}")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error fetching English notes from {ENGLISH_NOTES_JSON_URL}: {e}")
-    except json.JSONDecodeError:
-        logger.error(f"Error decoding JSON from {ENGLISH_NOTES_JSON_URL}")
-    except Exception as e:
-        logger.error(f"Error loading English notes: {e}")
-
 load_questions()
 load_leaderboard()
 load_weekly_questions()
-load_english_notes()
 
 async def send_question(context: ContextTypes.DEFAULT_TYPE):
     global current_question, answered_users, current_message_id, used_daily_questions
@@ -261,7 +241,7 @@ def save_leaderboard():
             "sha": sha,
             "branch": "main",  # Or your branch name
         }
-        update_response = requests.put(update_url, headers=headers, json=data)
+        update_response = requests.put(update_url, headers=headers, json(data))
         update_response.raise_for_status()
 
         logger.info("Leaderboard saved successfully to GitHub.")
@@ -269,7 +249,7 @@ def save_leaderboard():
         logger.error(f"Error saving leaderboard to GitHub: {e}")
 
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in [OWNER_ID, SECOND_OWNER]:
+    if update.effective_user.id != OWNER_ID and update.effective_user.id != SECOND_OWNER:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
     
@@ -305,13 +285,20 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"test_question: Failed to send test question: {e}")
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
-async def hourly_heartbeat(context: ContextTypes.DEFAULT_TYPE):
+async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    for owner_id in [OWNER_ID, SECOND_OWNER]:
-        await context.bot.send_message(chat_id=owner_id, text=f"💓 Hourly Heartbeat check - Bot is alive at {now}")
+    await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
+    await context.bot.send_message(chat_id=SECOND_OWNER, text=f"💓 Heartbeat check - Bot is alive at {now}")
+
+async def reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID and update.effective_user.id != SECOND_OWNER:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    await update.message.reply_text("🔄 Reloading the bot...")
+    os.system("curl https://render.com/activate-service")
 
 async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id not in [OWNER_ID, SECOND_OWNER]:
+    if update.effective_user.id != OWNER_ID and update.effective_user.id != SECOND_OWNER:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
     await context.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}")
@@ -401,7 +388,7 @@ async def fetch_questions_from_url():
 
 async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start test immediately (owner only)"""
-    if update.effective_chat.type != "private" or update.effective_user.id not in [OWNER_ID, SECOND_OWNER]:
+    if update.effective_user.id != OWNER_ID and update.effective_user.id != SECOND_OWNER:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
         
@@ -414,23 +401,32 @@ async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         weekly_test.reset()
         weekly_test.questions = [q for q in questions if q.get("id") not in used_weekly_questions]
         if not weekly_test.questions:
-            await update.message.reply_text("❌ No available questions left to post")
+            await update.message.reply_text("❌ No new questions available for the weekly quiz")
             return
-            
         weekly_test.active = True
-        await update.message.reply_text("✅ Test started successfully!")
-        await send_next_question(context)
+        
+        # Get group invite link
+        chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
+        weekly_test.group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
+        
+        # Send initial message to channel
+        channel_message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text="📢 *Weekly Test Starting Now!*\n"
+                 "Join 📖 Beem Academy | English 🎓 to partícipate!...",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
+            ])
+        )
+        weekly_test.channel_message_ids.append(channel_message.message_id)
+        
+        await update.message.reply_text("🚀 Starting weekly test...")
+        await send_weekly_question(context, 0)
+        
     except Exception as e:
         logger.error(f"Error starting test: {e}")
-        await update.message.reply_text(f"❌ Error: {str(e)}")
-
-async def reload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id not in [OWNER_ID, SECOND_OWNER]:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-    await context.bot.send_message(chat_id=OWNER_ID, text="🔄 Reloading service to wake it up.")
-    await context.bot.send_message(chat_id=SECOND_OWNER, text="🔄 Reloading service to wake it up.")
-    await update.message.reply_text("✅ Reload command executed. The service should wake up shortly.")
+        await update.message.reply_text(f"❌ Failed to start: {str(e)}")
 
 async def send_weekly_question(context, question_index):
     """Send question to group and announcement to channel"""
@@ -479,10 +475,10 @@ async def send_weekly_question(context, question_index):
             chat_id=CHANNEL_ID,
             text=f"🎯 *QUESTION {question_index + 1} IS LIVE!* 🎯\n\n"
                  f"{time_emoji} *Hurry!* Only {QUESTION_DURATION} seconds to answer!\n"
-                 f"💡 Test your knowledge and earn points!\n\n",
+                 f"💡 Test your knowledge and earn poínts!\n\n",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📖 Beem Academy | English 🎓", url=weekly_test.group_link)]
+                [InlineKeyboardButton("𝗘𝗡╸📖 Beem Academy | English 🎓", url=weekly_test.group_link)]
             ])
         )
         weekly_test.channel_message_ids.append(channel_message.message_id)
@@ -717,7 +713,7 @@ async def schedule_weekly_test(context):
         if days_until_friday == 0 and now.hour >= 18:
             days_until_friday = 7
 
-        next_friday = now + timedelta(days=days_until_friday)
+        next_friday = now + timedelta(days_until_friday)
         next_friday = next_friday.replace(hour=18, minute=0, second=0, microsecond=0)
 
         # Calculate time for teaser (30 minutes before quiz)
@@ -739,7 +735,7 @@ async def schedule_weekly_test(context):
         logger.error(f"Error scheduling weekly test: {e}")
 
 async def debug_env(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in [OWNER_ID, SECOND_OWNER]:
+    if update.effective_user.id != OWNER_ID and update.effective_user.id != SECOND_OWNER:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
 
@@ -839,6 +835,7 @@ def get_utc_time(hour, minute, timezone_str):
     utc_time = local_time.astimezone(pytz.utc).time()
     return utc_time
 
+````python name=bot.py
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     job_queue = application.job_queue
@@ -846,13 +843,21 @@ def main():
     # Schedule daily questions
     job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
     job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
-    job_queue.run_daily(send_question, get_utc_time(16, 20, "Asia/Gaza"), name="third_question")
+    job_queue.run_daily(send_question, get_utc_time(16, 20, "Asia/Gaza"), name="third_question")  # Set to 4:20 PM for testing
 
     # Weekly test scheduling
     job_queue.run_once(
         lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
         5,  # Initial delay to let the bot start
         name="initial_schedule"
+    )
+
+    # Heartbeat check every hour
+    job_queue.run_repeating(
+        heartbeat,
+        interval=3600,  # 1 hour in seconds
+        first=10,  # Initial delay to let the bot start
+        name="heartbeat_check"
     )
 
     # Command handlers
@@ -864,14 +869,11 @@ def main():
     application.add_handler(CommandHandler("debug", debug_env))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("stats", stats_command))
-    application.add_handler(CommandHandler("reload", reload))
+    application.add_handler(CommandHandler("reload", reload_command))
     application.add_handler(CallbackQueryHandler(handle_stats_buttons, pattern="^(stats_global_score|stats_my_stats|stats_back)$"))
 
     # Poll answer handler
     application.add_handler(PollAnswerHandler(handle_poll_answer))
-
-    # Job queue for hourly heartbeat
-    job_queue.run_repeating(hourly_heartbeat, interval=timedelta(hours=1))
 
     # Start bot
     if WEBHOOK_URL:
@@ -887,3 +889,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+````
