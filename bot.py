@@ -28,7 +28,6 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
 LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
 WEEKLY_QUESTIONS_JSON_URL = os.getenv("WEEKLY_QUESTIONS_JSON_URL")
-ENGLISH_NOTES_JSON_URL = os.getenv("ENGLISH_NOTES_JSON_URL")  # URL for English notes
 PORT = int(os.getenv("PORT", "5000"))
 
 # Constants
@@ -45,7 +44,6 @@ user_answers = {}
 answered_users = set()
 used_weekly_questions = set()
 used_daily_questions = set()  # Track used daily questions
-english_notes = []  # List to store English notes
 
 # Load Questions from URL
 DEBUG = True  # Set to True for extra debugging
@@ -117,27 +115,9 @@ def load_weekly_questions():
     except Exception as e:
         logger.error(f"Error loading weekly questions: {e}")
 
-def load_english_notes():
-    global english_notes
-    try:
-        if ENGLISH_NOTES_JSON_URL is None:
-            raise ValueError("ENGLISH_NOTES_JSON_URL is not set.")
-        
-        response = requests.get(ENGLISH_NOTES_JSON_URL)
-        response.raise_for_status()
-        english_notes = response.json().get("notes", [])
-        logger.info(f"Loaded {len(english_notes)} English notes from {ENGLISH_NOTES_JSON_URL}")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error fetching English notes from {ENGLISH_NOTES_JSON_URL}: {e}")
-    except json.JSONDecodeError:
-        logger.error(f"Error decoding JSON from {ENGLISH_NOTES_JSON_URL}")
-    except Exception as e:
-        logger.error(f"Error loading English notes: {e}")
-
 load_questions()
 load_leaderboard()
 load_weekly_questions()
-load_english_notes()
 
 async def send_question(context: ContextTypes.DEFAULT_TYPE):
     global current_question, answered_users, current_message_id, used_daily_questions
@@ -488,17 +468,6 @@ async def end_weekly_test(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     await delete_channel_messages(context)
 
-async def notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not english_notes:
-        await update.message.reply_text("❌ No notes available.")
-        return
-
-    notes_text = "📚 English Notes 📚\n\n"
-    for note in english_notes:
-        notes_text += f"- {note}\n"
-
-    await update.message.reply_text(notes_text)
-
 def main() -> None:
     application = Application.builder().token(BOT_TOKEN).build()
 
@@ -511,7 +480,6 @@ def main() -> None:
     application.add_handler(CommandHandler("setwebhook", set_webhook))
     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
     application.add_handler(CommandHandler("testquestion", test_question))
-    application.add_handler(CommandHandler("notes", notes))
     application.add_handler(CommandHandler("startweeklytest", start_weekly_test))
 
     # Callback query handler
