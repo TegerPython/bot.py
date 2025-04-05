@@ -835,7 +835,7 @@ def get_utc_time(hour, minute, timezone_str):
     utc_time = local_time.astimezone(pytz.utc).time()
     return utc_time
 
-````python name=bot.py
+python name=bot.py
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     job_queue = application.job_queue
@@ -889,4 +889,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-````
