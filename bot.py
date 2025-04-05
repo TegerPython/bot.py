@@ -161,11 +161,11 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = query.from_user.first_name
 
     if current_question is None:
-        await query.answer("❌ No active question at the moment.", show_alert=True)
+        await query.answer("No active question at the moment.", show_alert=True)
         return
 
     if user_id in answered_users:
-        await query.answer("❌ You already answered this question.", show_alert=True)
+        await query.answer("You already answered this question.", show_alert=True)
         return
 
     answered_users.add(user_id)
@@ -178,7 +178,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     correct = user_answer == correct_answer
 
     if correct:
-        await query.answer("✅ Correct!")
+        await query.answer("Correct!")
         if str(user_id) not in leaderboard:
             leaderboard[str(user_id)] = {"username": username, "score": 0, "total_answers": 0, "correct_answers": 0}
         leaderboard[str(user_id)]["score"] += 1
@@ -206,7 +206,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Failed to edit message: {e}")
     else:
-        await query.answer("❌ Incorrect.", show_alert=True)
+        await query.answer("Incorrect.", show_alert=True)
 
     # Check if total_answers key exists before incrementing
     if "total_answers" not in leaderboard[str(user_id)]:
@@ -240,7 +240,7 @@ def save_leaderboard():
             "sha": sha,
             "branch": "main",  # Or your branch name
         }
-        update_response = requests.put(update_url, headers=headers, json=data)
+        update_response = requests.put(update_url, headers=headers, json(data))
         update_response.raise_for_status()
 
         logger.info("Leaderboard saved successfully to GitHub.")
@@ -249,11 +249,11 @@ def save_leaderboard():
 
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
+        await update.message.reply_text("You are not authorized to use this command.")
         return
     
     if not questions:
-        await update.message.reply_text("❌ No questions loaded!")
+        await update.message.reply_text("No questions loaded!")
         return
     
     # Ensure the current question is set properly
@@ -279,21 +279,21 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             logger.info("test_question: message sending failed")
 
-        await update.message.reply_text(f"✅ Test question sent in channel. Question: {current_question.get('question')}")
+        await update.message.reply_text(f"Test question sent in channel. Question: {current_question.get('question')}")
     except Exception as e:
         logger.error(f"test_question: Failed to send test question: {e}")
-        await update.message.reply_text(f"❌ Error: {str(e)}")
+        await update.message.reply_text(f"Error: {str(e)}")
 
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
+    await context.bot.send_message(chat_id=OWNER_ID, text=f"Heartbeat check - Bot is alive at {now}")
 
 async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
+        await update.message.reply_text("You are not authorized to use this command.")
         return
     await context.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}")
-    await update.message.reply_text("✅ Webhook refreshed.")
+    await update.message.reply_text("Webhook refreshed.")
 
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
@@ -305,10 +305,10 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(leaderboard_text)
     except KeyError as e:
         logger.error(f"Error in leaderboard_command: KeyError - {e}")
-        await update.message.reply_text("❌ Failed to display leaderboard due to data error.")
+        await update.message.reply_text("Failed to display leaderboard due to data error.")
     except Exception as e:
         logger.error(f"Error in leaderboard_command: {e}")
-        await update.message.reply_text("❌ Failed to display leaderboard.")
+        await update.message.reply_text("Failed to display leaderboard.")
 
 # Weekly Test Functions
 class WeeklyTest:
@@ -380,19 +380,19 @@ async def fetch_questions_from_url():
 async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start test immediately (owner only)"""
     if update.effective_chat.type != "private" or update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
+        await update.message.reply_text("You are not authorized to use this command.")
         return
         
     try:
         questions = await fetch_questions_from_url()
         if not questions:
-            await update.message.reply_text("❌ No questions available")
+            await update.message.reply_text("No questions available")
             return
             
         weekly_test.reset()
         weekly_test.questions = [q for q in questions if q.get("id") not in used_weekly_questions]
         if not weekly_test.questions:
-            await update.message.reply_text("❌ No new questions available for the weekly quiz")
+            await update.message.reply_text("No new questions available for the weekly quiz")
             return
         weekly_test.active = True
         
@@ -412,12 +412,12 @@ async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         weekly_test.channel_message_ids.append(channel_message.message_id)
         
-        await update.message.reply_text("🚀 Starting weekly test...")
+        await update.message.reply_text("Starting weekly test...")
         await send_weekly_question(context, 0)
         
     except Exception as e:
         logger.error(f"Error starting test: {e}")
-        await update.message.reply_text(f"❌ Failed to start: {str(e)}")
+        await update.message.reply_text(f"Failed to start: {str(e)}")
 
 async def send_weekly_question(context, question_index):
     """Send question to group and announcement to channel"""
@@ -442,7 +442,7 @@ async def send_weekly_question(context, question_index):
         # Send poll to group
         group_message = await context.bot.send_poll(
             chat_id=DISCUSSION_GROUP_ID,
-            question=f"❓ Question {question_index + 1}: {question['question']}",
+            question=f"Question {question_index + 1}: {question['question']}",
             options=question["options"],
             is_anonymous=False,
             protect_content=True,
@@ -464,9 +464,9 @@ async def send_weekly_question(context, question_index):
         # Send channel announcement
         channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
-            text=f"🎯 *QUESTION {question_index + 1} IS LIVE!* 🎯\n\n"
-                 f"{time_emoji} *Hurry!* Only {QUESTION_DURATION} seconds to answer!\n"
-                 f"💡 Test your knowledge and earn poínts!\n\n",
+            text=f"QUESTION {question_index + 1} IS LIVE!\n\n"
+                 f"{time_emoji} Hurry! Only {QUESTION_DURATION} seconds to answer!\n"
+                 "Test your knowledge and earn points!\n\n",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("𝗘𝗡╸📖 Beem Academy | English 🎓", url=weekly_test.group_link)]
@@ -506,7 +506,7 @@ async def stop_poll_and_check_answers(context, question_index):
         question = weekly_test.questions[question_index]
         await context.bot.send_message(
             chat_id=DISCUSSION_GROUP_ID,
-            text=f"✅ *Correct Answer:* {question['options'][question['correct_option']]}",
+            text=f"Correct Answer: {question['options'][question['correct_option']]}",
             parse_mode="Markdown"
         )
 
@@ -553,15 +553,15 @@ async def send_leaderboard_results(context):
     results = weekly_test.get_results()
 
     # Format leaderboard message
-    message = "🏆 *Final Results* 🏆\n\n"
+    message = "Final Results\n\n"
     if results:
         for i, (user_id, data) in enumerate(results, start=1):
             if i == 1:
-                message += f"🥇 *{data['name']}* - {data['score']} pts\n"
+                message += f"1. {data['name']} - {data['score']} pts\n"
             elif i == 2:
-                message += f"🥈 *{data['name']}* - {data['score']} pts\n"
+                message += f"2. {data['name']} - {data['score']} pts\n"
             elif i == 3:
-                message += f"🥉 *{data['name']}* - {data['score']} pts\n"
+                message += f"3. {data['name']} - {data['score']} pts\n"
             else:
                 message += f"{i}. {data['name']} - {data['score']} pts\n"
             # Add weekly scores to main leaderboard
@@ -608,9 +608,9 @@ async def create_countdown_teaser(context):
         # Send initial teaser
         message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
-            text="🕒 *Quiz Countdown Begins!*\n\n"
+            text="Quiz Countdown Begins!\n\n"
                  "The weekly quiz starts in 30 minutes!\n"
-                 "🕒 Countdown: 30:00 minutes",
+                 "Countdown: 30:00 minutes",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("Join Discussion", url=invite_link)]
@@ -624,7 +624,7 @@ async def create_countdown_teaser(context):
                 await context.bot.edit_message_text(
                     chat_id=CHANNEL_ID,
                     message_id=message.message_id,
-                    text=f"🕒 *Quiz Countdown!*\n\n"
+                    text=f"Quiz Countdown!\n\n"
                          f"The weekly quiz starts in {remaining_time // 60:02d}:{remaining_time % 60:02d} minutes!\n"
                          "Get ready to test your knowledge!",
                     parse_mode="Markdown",
@@ -678,7 +678,7 @@ async def start_quiz(context):
         # Send quiz start message
         channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
-            text="🚀 *Quiz Starts Now!*\n"
+            text="Quiz Starts Now!\n"
                  "Get ready for the weekly challenge!",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
@@ -727,37 +727,37 @@ async def schedule_weekly_test(context):
 
 async def debug_env(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
+        await update.message.reply_text("You are not authorized to use this command.")
         return
 
     # Check key environment variables
-    debug_info = "🔍 Debug Information:\n\n"
-    debug_info += f"BOT_TOKEN: {'✅ Set' if BOT_TOKEN else '❌ Missing'}\n"
+    debug_info = "Debug Information:\n\n"
+    debug_info += f"BOT_TOKEN: {'Set' if BOT_TOKEN else 'Missing'}\n"
     debug_info += f"CHANNEL_ID: {CHANNEL_ID}\n"
     debug_info += f"OWNER_ID: {OWNER_ID}\n"
     debug_info += f"DISCUSSION_GROUP_ID: {DISCUSSION_GROUP_ID}\n"
     debug_info += f"QUESTIONS_JSON_URL: {QUESTIONS_JSON_URL}\n"
     debug_info += f"Questions loaded: {len(questions)}\n"
-    debug_info += f"Current question: {'✅ Set' if current_question else '❌ None'}\n"
+    debug_info += f"Current question: {'Set' if current_question else 'None'}\n"
 
     await update.message.reply_text(debug_info)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Display rules, purpose, and help command when /start is used"""
     start_text = (
-        "👋 Welcome to the Quiz Bot!\n\n"
-        "📜 *Rules:*\n"
+        "Welcome to the Quiz Bot!\n\n"
+        "Rules:\n"
         "1. Be respectful to others.\n"
         "2. No spamming.\n"
         "3. Answer questions honestly.\n\n"
-        "🎯 *Purpose:*\n"
+        "Purpose:\n"
         "This bot is designed to test your knowledge through daily and weekly quizzes. "
         "Compete with others, climb the leaderboard, and have fun learning!\n\n"
-        "🤔 *What it does:*\n"
+        "What it does:\n"
         "- Posts daily questions at 8:00 AM, 12:30 PM, and 4:20 PM (Gaza time).\n"
         "- Hosts a weekly quiz every Friday at 6:00 PM (Gaza time).\n"
         "- Tracks your answers and scores to keep you motivated.\n\n"
-        "📢 *Groups:*\n"
+        "Groups:\n"
         "Join our groups to participate in quizzes and interact with other members."
     )
 
@@ -771,15 +771,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
-        "📚 *Help Guide* 📚\n\n"
+        "Help Guide\n\n"
         "Welcome to the Quiz Bot! Here are the available commands and features:\n\n"
-        "1. `/start` - Start the weekly test (Owner only).\n"
-        "2. `/weeklytest` - Start the weekly test (Owner only, private chat).\n"
-        "3. `/test` - Send a test question to the channel (Owner only).\n"
-        "4. `/leaderboard` - Display the current leaderboard.\n"
-        "5. `/stats` - Show your quiz statistics.\n"
-        "6. `/debug` - Display debug information (Owner only).\n\n"
-        "💡 *How it works:*\n"
+        "1. /start - Start the weekly test (Owner only).\n"
+        "2. /weeklytest - Start the weekly test (Owner only, private chat).\n"
+        "3. /test - Send a test question to the channel (Owner only).\n"
+        "4. /leaderboard - Display the current leaderboard.\n"
+        "5. /stats - Show your quiz statistics.\n"
+        "6. /debug - Display debug information (Owner only).\n\n"
+        "How it works:\n"
         "- Daily questions are posted at 8:00 AM, 12:30 PM, and 4:20 PM (Gaza time).\n"
         "- Weekly tests are conducted every Friday at 6:00 PM (Gaza time).\n"
         "- Answer questions in the discussion group to earn points and climb the leaderboard!\n"
@@ -794,7 +794,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        "📈 *Statistics Menu* 📈\n\n"
+        "Statistics Menu\n\n"
         "Choose an option below to view your quiz statistics:",
         reply_markup=reply_markup,
         parse_mode="Markdown"
@@ -807,11 +807,11 @@ async def handle_stats_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if data == "stats_global_score":
         sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
-        leaderboard_text = "🌐 *Global Leaderboard* 🌐\n\n"
+        leaderboard_text = "Global Leaderboard\n\n"
         for rank, (user_id, player) in enumerate(sorted_leaderboard, start=1):
             leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
         await query.edit_message_text(leaderboard_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Back", callback_data="stats_back")],
+            [InlineKeyboardButton("Back", callback_data="stats_back")],
         ]))
 
     elif data == "stats_my_stats":
@@ -822,26 +822,26 @@ async def handle_stats_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
             sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
             rank = next((i for i, (uid, _) in enumerate(sorted_leaderboard, start=1) if uid == user_id), None)
             stats_text = (
-                f"📊 *My Stats* 📊\n\n"
-                f"👤 *User:* {player['username']}\n"
-                f"📋 *Total Questions Answered:* {total_answers}\n"
-                f"✅ *Correct Answers:* {correct_answers}\n"
-                f"🏆 *Global Rank:* {rank}\n"
-                f"🔢 *Score:* {player['score']} points\n"
+                f"My Stats\n\n"
+                f"User: {player['username']}\n"
+                f"Total Questions Answered: {total_answers}\n"
+                f"Correct Answers: {correct_answers}\n"
+                f"Global Rank: {rank}\n"
+                f"Score: {player['score']} points\n"
             )
         else:
-            stats_text = "❌ You have not answered any questions yet."
+            stats_text = "You have not answered any questions yet."
         await query.edit_message_text(stats_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Back", callback_data="stats_back")],
+            [InlineKeyboardButton("Back", callback_data="stats_back")],
         ]))
 
     elif data == "stats_back":
         await query.edit_message_text(
-            "📈 *Statistics Menu* 📈\n\n"
+            "Statistics Menu\n\n"
             "Choose an option below to view your quiz statistics:",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🌐 Global Score", callback_data="stats_global_score")],
-                [InlineKeyboardButton("📊 My Stats", callback_data="stats_my_stats")],
+                [InlineKeyboardButton("Global Score", callback_data="stats_global_score")],
+                [InlineKeyboardButton("My Stats", callback_data="stats_my_stats")],
             ]),
             parse_mode="Markdown"
         )
@@ -852,9 +852,11 @@ def get_utc_time(hour, minute, timezone_str):
     utc_time = local_time.astimezone(pytz.utc).time()
     return utc_time
 
-async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    await context.bot.send_message(chat_id=OWNER_ID, text=f"Heartbeat check - Bot is alive at {now}")
+async def reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("You are not authorized to use this command.")
+        return
+    await update.message.reply_text("Reloading bot and keeping the render service alive.")
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
@@ -883,6 +885,7 @@ def main():
     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
     application.add_handler(CommandHandler("debug", debug_env))
     application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(CommandHandler("reload", reload_command))
     application.add_handler(CallbackQueryHandler(handle_stats_buttons, pattern="^(stats_global_score|stats_my_stats|stats_back)$"))
 
     # Poll answer handler
