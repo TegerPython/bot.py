@@ -120,6 +120,9 @@ def load_weekly_questions():
 def load_english_notes():
     global english_notes
     try:
+        if ENGLISH_NOTES_JSON_URL is None:
+            raise ValueError("ENGLISH_NOTES_JSON_URL is not set.")
+        
         response = requests.get(ENGLISH_NOTES_JSON_URL)
         response.raise_for_status()
         english_notes = response.json().get("notes", [])
@@ -502,7 +505,7 @@ def main() -> None:
     job_queue = application.job_queue
 
     # Command handlers
-    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("reload", reload_command))
     application.add_handler(CommandHandler("setwebhook", set_webhook))
