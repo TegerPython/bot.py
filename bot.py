@@ -258,7 +258,274 @@ def save_leaderboard():
             "sha": sha,
             "branch": "main",  # Or your branch name
         }
-        update_response = requests.put(update_url, headers=headers, json(data))
+        update_response = requests.put(update_url, headers=headers, json=data)
+        update_response.raise_for_status()
+
+        logger.info("Leaderboard saved successfully to GitHub.")
+    except Exception as e:
+        logger.error(f"Error saving leaderboard to GitHub: {e}")
+
+import os
+import logging
+import random
+import json
+import requests
+import time
+import aiohttp
+import asyncio
+import pytz
+import base64
+from datetime import datetime, timedelta
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue, PollAnswerHandler, filters
+
+# Logging setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Environment Variables
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+logger.info(f"BOT_TOKEN: {BOT_TOKEN}")
+
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
+SECOND_OWNER = int(os.getenv("SECOND_OWNER_ID"))
+DISCUSSION_GROUP_ID = int(os.getenv("DISCUSSION_GROUP_ID", "0"))
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
+LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
+WEEKLY_QUESTIONS_JSON_URL = os.getenv("WEEKLY_QUESTIONS_JSON_URL")
+ENGLISH_NOTES_JSON_URL = os.getenv("ENGLISH_NOTES_JSON_URL")  # URL for English notes
+PORT = int(os.getenv("PORT", "5000"))
+
+# Constants
+QUESTION_DURATION = 30  # Default duration (seconds)
+NEXT_QUESTION_DELAY = 2  # seconds between questions
+MAX_QUESTIONS = 10  # Maximum number of questions per test
+
+# Global variables
+questions = []
+leaderboard = {}
+current_question = None
+current_message_id = None
+user_answers = {}
+answered_users = set()
+used_weekly_questions = set()
+used_daily_questions = set()  # Track used daily questions
+english_notes = []  # List to store English notes
+
+# Load Questions from URL
+DEBUG = True  # Set to True for extra debugging
+
+def load_questions():
+    global questions
+    try:
+        if DEBUG:
+            logger.info(f"Attempting to load questions from {QUESTIONS_JSON_URL}")
+        response = requests.get(QUESTIONS_JSON_URL)
+        if DEBUG:
+            logger.info(f"Response status: {response.status_code}")
+        response.raise_for_status()
+        questions = response.json()
+        if DEBUG:
+            logger.info(f"Questions loaded: {len(questions)}")
+            if questions:
+                logger.info(f"First question sample: {json.dumps(questions[0])[:200]}...")
+        logger.info(f"Loaded {len(questions)} questions from {QUESTIONS_JSON_URL}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching questions from {QUESTIONS_JSON_URL}: {e}")
+    except json.JSONDecodeError as e:
+        logger.error(f"Error decoding JSON from {QUESTIONS_JSON_URL}: {e}")
+        if DEBUG:
+            try:
+                logger.error(f"Raw response: {response.text[:500]}...")
+            except:
+                pass
+    except Exception as e:
+        logger.error(f"Error loading questions: {e}")
+
+def load_leaderboard():
+    global leaderboard
+    try:
+        response = requests.get(LEADERBOARD_JSON_URL)
+        response.raise_for_status()
+        leaderboard = response.json()
+        
+        # Ensure all required keys exist in each entry
+        for user_id, data in leaderboard.items():
+            if "username" not in data:
+                data["username"] = f"User {user_id}"
+            if "score" not in data:
+                data["score"] = 0
+            if "total_answers" not in data:
+                data["total_answers"] = 0
+            if "correct_answers" not in data:
+                data["correct_answers"] = 0
+                
+        logger.info(f"Loaded leaderboard from {LEADERBOARD_JSON_URL}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching leaderboard from {LEADERBOARD_JSON_URL}: {e}")
+    except json.JSONDecodeError:
+        logger.error(f"Error decoding leaderboard from {LEADERBOARD_JSON_URL}")
+    except Exception as e:
+        logger.error(f"Error loading leaderboard: {e}")
+
+def load_weekly_questions():
+    global weekly_questions
+    try:
+        response = requests.get(WEEKLY_QUESTIONS_JSON_URL)
+        response.raise_for_status()
+        weekly_questions = response.json()
+        logger.info(f"Loaded {len(weekly_questions)} weekly questions from {WEEKLY_QUESTIONS_JSON_URL}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching weekly questions from {WEEKLY_QUESTIONS_JSON_URL}: {e}")
+    except json.JSONDecodeError:
+        logger.error(f"Error decoding JSON from {WEEKLY_QUESTIONS_JSON_URL}")
+    except Exception as e:
+        logger.error(f"Error loading weekly questions: {e}")
+
+def load_english_notes():
+    global english_notes
+    try:
+        response = requests.get(ENGLISH_NOTES_JSON_URL)
+        response.raise_for_status()
+        english_notes = response.json().get("notes", [])
+        logger.info(f"Loaded {len(english_notes)} English notes from {ENGLISH_NOTES_JSON_URL}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching English notes from {ENGLISH_NOTES_JSON_URL}: {e}")
+    except json.JSONDecodeError:
+        logger.error(f"Error decoding JSON from {ENGLISH_NOTES_JSON_URL}")
+    except Exception as e:
+        logger.error(f"Error loading English notes: {e}")
+
+load_questions()
+load_leaderboard()
+load_weekly_questions()
+load_english_notes()
+
+async def send_question(context: ContextTypes.DEFAULT_TYPE):
+    global current_question, answered_users, current_message_id, used_daily_questions
+    answered_users = set()
+    if not questions:
+        logger.error("send_question: No questions available")
+        return
+
+    available_questions = [q for q in questions if q["id"] not in used_daily_questions]
+    if not available_questions:
+        logger.error("send_question: No available questions left to post")
+        return
+
+    current_question = available_questions[0]  # Pick the first available question
+    used_daily_questions.add(current_question["id"])
+
+    keyboard = [[InlineKeyboardButton(option, callback_data=f"answer_{option}")] for option in current_question.get("options", [])]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    try:
+        message = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=current_question.get("question"),
+            reply_markup=reply_markup,
+            disable_web_page_preview=True,
+            disable_notification=False,
+        )
+        if message and message.message_id:
+            current_message_id = message.message_id
+            logger.info("send_question: message sent successfully")
+        else:
+            logger.info("send_question: message sending failed")
+
+    except Exception as e:
+        logger.error(f"send_question: Failed to send question: {e}")
+
+async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global answered_users, current_question, current_message_id, leaderboard
+
+    query = update.callback_query
+    user_id = query.from_user.id
+    username = query.from_user.first_name
+
+    if current_question is None:
+        await query.answer("❌ No active question at the moment.", show_alert=True)
+        return
+
+    if user_id in answered_users:
+        await query.answer("❌ You already answered this question.", show_alert=True)
+        return
+
+    answered_users.add(user_id)
+    user_answer = query.data.replace("answer_", "").strip()
+    correct_answer = current_question.get("correct_option", "").strip()
+
+    logger.info(f"User answer: '{user_answer}'")
+    logger.info(f"Correct answer: '{correct_answer}'")
+
+    correct = user_answer == correct_answer
+
+    if correct:
+        await query.answer("✅ Correct!")
+        if str(user_id) not in leaderboard:
+            leaderboard[str(user_id)] = {"username": username, "score": 0, "total_answers": 0, "correct_answers": 0}
+        leaderboard[str(user_id)]["score"] += 1
+        
+        # Check if correct_answers key exists before incrementing
+        if "correct_answers" not in leaderboard[str(user_id)]:
+            leaderboard[str(user_id)]["correct_answers"] = 0
+        leaderboard[str(user_id)]["correct_answers"] += 1
+
+        explanation = current_question.get("explanation", "No explanation provided.")
+        edited_text = (
+            "📝 Daily Challenge (Answered)\n\n"
+            f"Question: {current_question.get('question')}\n"
+            f"✅ Correct Answer: {current_question.get('correct_option')}\n"
+            f"ℹ️ Explanation: {explanation}\n\n"
+            f"🏆 Winner: {username}"
+        )
+        try:
+            await context.bot.edit_message_text(
+                chat_id=CHANNEL_ID,
+                message_id=current_message_id,
+                text=edited_text,
+                reply_markup=None  # Remove the inline keyboard
+            )
+        except Exception as e:
+            logger.error(f"Failed to edit message: {e}")
+    else:
+        await query.answer("❌ Incorrect.", show_alert=True)
+
+    # Check if total_answers key exists before incrementing
+    if "total_answers" not in leaderboard[str(user_id)]:
+        leaderboard[str(user_id)]["total_answers"] = 0
+    leaderboard[str(user_id)]["total_answers"] += 1
+    
+    save_leaderboard()
+
+def save_leaderboard():
+    try:
+        github_token = os.getenv("GITHUB_TOKEN")
+        repo_owner = "TegerPython"  # Replace with your GitHub username
+        repo_name = "bot_data"  # Replace with your repository name
+        file_path = "leaderboard.json"
+
+        # Get the current file's SHA for updating
+        get_file_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
+        headers = {"Authorization": f"token {github_token}", "Accept": "application/vnd.github.v3+json"}
+        get_response = requests.get(get_file_url, headers=headers)
+        get_response.raise_for_status()
+        sha = get_response.json()["sha"]
+
+        # Update the file
+        content = json.dumps(leaderboard, indent=4).encode("utf-8")
+        encoded_content = base64.b64encode(content).decode("utf-8")
+
+        update_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
+        data = {
+            "message": "Update leaderboard",
+            "content": encoded_content,
+            "sha": sha,
+            "branch": "main",  # Or your branch name
+        }
+        update_response = requests.put(update_url, headers=headers, json=data)
         update_response.raise_for_status()
 
         logger.info("Leaderboard saved successfully to GitHub.")
@@ -710,7 +977,7 @@ async def schedule_weekly_test(context):
         now = datetime.now(gaza_tz)
 
         # Calculate next Friday at 6 PM
-        days until friday = (4 - now.weekday()) % 7
+        days_until_friday = (4 - now.weekday()) % 7
         if days_until_friday == 0 and now.hour >= 18:
             days_until_friday = 7
 
