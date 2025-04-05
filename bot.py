@@ -44,12 +44,14 @@ user_answers = {}
 answered_users = set()
 used_weekly_questions = set()
 used_daily_questions = set()  # Track used daily questions
+next_daily_question_index = 0  # Index for the next daily question
+next_weekly_question_index = 0  # Index for the next weekly question
 
 # Load Questions from URL
 DEBUG = True  # Set to True for extra debugging
 
 def load_questions():
-    global questions
+    global questions, used_daily_questions, next_daily_question_index
     try:
         if DEBUG:
             logger.info(f"Attempting to load questions from {QUESTIONS_JSON_URL}")
@@ -58,6 +60,8 @@ def load_questions():
             logger.info(f"Response status: {response.status_code}")
         response.raise_for_status()
         questions = response.json()
+        used_daily_questions = set()  # Reset used daily questions when loading new questions
+        next_daily_question_index = 0  # Reset the index for daily questions
         if DEBUG:
             logger.info(f"Questions loaded: {len(questions)}")
             if questions:
@@ -102,11 +106,13 @@ def load_leaderboard():
         logger.error(f"Error loading leaderboard: {e}")
 
 def load_weekly_questions():
-    global weekly_questions
+    global weekly_questions, used_weekly_questions, next_weekly_question_index
     try:
         response = requests.get(WEEKLY_QUESTIONS_JSON_URL)
         response.raise_for_status()
         weekly_questions = response.json()
+        used_weekly_questions = set()  # Reset used weekly questions when loading new questions
+        next_weekly_question_index = 0  # Reset the index for weekly questions
         logger.info(f"Loaded {len(weekly_questions)} weekly questions from {WEEKLY_QUESTIONS_JSON_URL}")
     except requests.exceptions.RequestException as e:
         logger.error(f"Error fetching weekly questions from {WEEKLY_QUESTIONS_JSON_URL}: {e}")
@@ -120,19 +126,19 @@ load_leaderboard()
 load_weekly_questions()
 
 async def send_question(context: ContextTypes.DEFAULT_TYPE):
-    global current_question, answered_users, current_message_id, used_daily_questions
+    global current_question, answered_users, current_message_id, used_daily_questions, next_daily_question_index
     answered_users = set()
     if not questions:
         logger.error("send_question: No questions available")
         return
 
-    available_questions = [q for q in questions if q["id"] not in used_daily_questions]
-    if not available_questions:
+    if next_daily_question_index >= len(questions):
         logger.error("send_question: No available questions left to post")
         return
 
-    current_question = available_questions[0]  # Pick the first available question
+    current_question = questions[next_daily_question_index]
     used_daily_questions.add(current_question["id"])
+    next_daily_question_index += 1
 
     keyboard = [[InlineKeyboardButton(option, callback_data=f"answer_{option}")] for option in current_question.get("options", [])]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -258,9 +264,15 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Ensure the current question is set properly
-    global current_question, current_message_id, answered_users
+    global current_question, current_message_id, answered_users, next_daily_question_index
     answered_users = set()
-    current_question = random.choice(questions)
+    if next_daily_question_index >= len(questions):
+        await update.message.reply_text("No available questions left to post")
+        return
+
+    current_question = questions[next_daily_question_index]
+    used_daily_questions.add(current_question["id"])
+    next_daily_question_index += 1
     
     try:
         keyboard = [[InlineKeyboardButton(option, callback_data=f"answer_{option}")] for option in current_question.get("options", [])]
@@ -423,16 +435,21 @@ async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def send_weekly_question(context, question_index):
     """Send question to group and announcement to channel"""
-    global weekly_test, used_weekly_questions
+    global weekly_test, used_weekly_questions, next_weekly_question_index
     
     if not weekly_test.active or question_index >= len(weekly_test.questions):
         if weekly_test.active:
             await send_leaderboard_results(context)
         return
 
-    question = weekly_test.questions[question_index]
-    weekly_test.current_question_index = question_index
-    used_weekly_questions.add(question.get("id", question_index))  # Use index if id is not present
+    if next_weekly_question_index >= len(weekly_test.questions):
+        logger.error("send_weekly_question: No available questions left to post")
+        return
+
+    question = weekly_test.questions[next_weekly_question_index]
+    weekly_test.current_question_index = next_weekly_question_index
+    used_weekly_questions.add(question.get("id", next_weekly_question_index))  # Use index if id is not present
+    next_weekly_question_index += 1
     
     try:
         # Restrict messaging during quiz
@@ -861,7 +878,7 @@ def main():
     # Schedule daily questions
     job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
     job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
-    job_queue.run_daily(send_question, get_utc_time(16, 20, "Asia/Gaza"), name="third_question")  # Set to 4:20 PM for testing
+    job_queue.run_daily(send_question, get_utc_time(16, 20, "Asia/Gaza"), name="third_question")
 
     # Schedule hourly heartbeat
     job_queue.run_repeating(heartbeat, interval=3600, first=0, name="hourly_heartbeat")
