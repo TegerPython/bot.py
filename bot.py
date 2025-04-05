@@ -22,11 +22,13 @@ logger.info(f"BOT_TOKEN: {BOT_TOKEN}")
 
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
+SECOND_OWNER = int(os.getenv("SECOND_OWNER_ID"))
 DISCUSSION_GROUP_ID = int(os.getenv("DISCUSSION_GROUP_ID", "0"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
 LEADERBOARD_JSON_URL = os.getenv("LEADERBOARD_JSON_URL")
 WEEKLY_QUESTIONS_JSON_URL = os.getenv("WEEKLY_QUESTIONS_JSON_URL")
+ENGLISH_NOTES_JSON_URL = os.getenv("ENGLISH_NOTES_JSON_URL")  # URL for English notes
 PORT = int(os.getenv("PORT", "5000"))
 
 # Constants
@@ -43,6 +45,7 @@ user_answers = {}
 answered_users = set()
 used_weekly_questions = set()
 used_daily_questions = set()  # Track used daily questions
+english_notes = []  # List to store English notes
 
 # Load Questions from URL
 DEBUG = True  # Set to True for extra debugging
@@ -114,9 +117,24 @@ def load_weekly_questions():
     except Exception as e:
         logger.error(f"Error loading weekly questions: {e}")
 
+def load_english_notes():
+    global english_notes
+    try:
+        response = requests.get(ENGLISH_NOTES_JSON_URL)
+        response.raise_for_status()
+        english_notes = response.json().get("notes", [])
+        logger.info(f"Loaded {len(english_notes)} English notes from {ENGLISH_NOTES_JSON_URL}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching English notes from {ENGLISH_NOTES_JSON_URL}: {e}")
+    except json.JSONDecodeError:
+        logger.error(f"Error decoding JSON from {ENGLISH_NOTES_JSON_URL}")
+    except Exception as e:
+        logger.error(f"Error loading English notes: {e}")
+
 load_questions()
 load_leaderboard()
 load_weekly_questions()
+load_english_notes()
 
 async def send_question(context: ContextTypes.DEFAULT_TYPE):
     global current_question, answered_users, current_message_id, used_daily_questions
@@ -240,7 +258,7 @@ def save_leaderboard():
             "sha": sha,
             "branch": "main",  # Or your branch name
         }
-        update_response = requests.put(update_url, headers=headers, json=data)
+        update_response = requests.put(update_url, headers=headers, json(data))
         update_response.raise_for_status()
 
         logger.info("Leaderboard saved successfully to GitHub.")
@@ -248,7 +266,7 @@ def save_leaderboard():
         logger.error(f"Error saving leaderboard to GitHub: {e}")
 
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
+    if update.effective_user.id not in [OWNER_ID, SECOND_OWNER]:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
     
@@ -284,12 +302,13 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"test_question: Failed to send test question: {e}")
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
-async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
+async def hourly_heartbeat(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    await context.bot.send_message(chat_id=OWNER_ID, text=f"💓 Heartbeat check - Bot is alive at {now}")
+    for owner_id in [OWNER_ID, SECOND_OWNER]:
+        await context.bot.send_message(chat_id=owner_id, text=f"💓 Hourly Heartbeat check - Bot is alive at {now}")
 
 async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id != OWNER_ID:
+    if update.effective_user.id not in [OWNER_ID, SECOND_OWNER]:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
     await context.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}")
@@ -379,7 +398,7 @@ async def fetch_questions_from_url():
 
 async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start test immediately (owner only)"""
-    if update.effective_user.id != OWNER_ID:
+    if update.effective_chat.type != "private" or update.effective_user.id not in [OWNER_ID, SECOND_OWNER]:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
         
@@ -392,32 +411,23 @@ async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         weekly_test.reset()
         weekly_test.questions = [q for q in questions if q.get("id") not in used_weekly_questions]
         if not weekly_test.questions:
-            await update.message.reply_text("❌ No new questions available for the weekly quiz")
+            await update.message.reply_text("❌ No available questions left to post")
             return
+            
         weekly_test.active = True
-        
-        # Get group invite link
-        chat = await context.bot.get_chat(DISCUSSION_GROUP_ID)
-        weekly_test.group_link = chat.invite_link or (await context.bot.create_chat_invite_link(DISCUSSION_GROUP_ID)).invite_link
-        
-        # Send initial message to channel
-        channel_message = await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text="📢 *Weekly Test Starting Now!*\n"
-                 "Join 📖 Beem Academy | English 🎓 to partícipate!...",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Join Discussion", url=weekly_test.group_link)]
-            ])
-        )
-        weekly_test.channel_message_ids.append(channel_message.message_id)
-        
-        await update.message.reply_text("🚀 Starting weekly test...")
-        await send_weekly_question(context, 0)
-        
+        await update.message.reply_text("✅ Test started successfully!")
+        await send_next_question(context)
     except Exception as e:
         logger.error(f"Error starting test: {e}")
-        await update.message.reply_text(f"❌ Failed to start: {str(e)}")
+        await update.message.reply_text(f"❌ Error: {str(e)}")
+
+async def reload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id not in [OWNER_ID, SECOND_OWNER]:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    await context.bot.send_message(chat_id=OWNER_ID, text="🔄 Reloading service to wake it up.")
+    await context.bot.send_message(chat_id=SECOND_OWNER, text="🔄 Reloading service to wake it up.")
+    await update.message.reply_text("✅ Reload command executed. The service should wake up shortly.")
 
 async def send_weekly_question(context, question_index):
     """Send question to group and announcement to channel"""
@@ -466,7 +476,7 @@ async def send_weekly_question(context, question_index):
             chat_id=CHANNEL_ID,
             text=f"🎯 *QUESTION {question_index + 1} IS LIVE!* 🎯\n\n"
                  f"{time_emoji} *Hurry!* Only {QUESTION_DURATION} seconds to answer!\n"
-                 f"💡 Test your knowledge and earn poínts!\n\n",
+                 f"💡 Test your knowledge and earn points!\n\n",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("📖 Beem Academy | English 🎓", url=weekly_test.group_link)]
@@ -700,7 +710,7 @@ async def schedule_weekly_test(context):
         now = datetime.now(gaza_tz)
 
         # Calculate next Friday at 6 PM
-        days_until_friday = (4 - now.weekday()) % 7
+        days until friday = (4 - now.weekday()) % 7
         if days_until_friday == 0 and now.hour >= 18:
             days_until_friday = 7
 
@@ -726,7 +736,7 @@ async def schedule_weekly_test(context):
         logger.error(f"Error scheduling weekly test: {e}")
 
 async def debug_env(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
+    if update.effective_user.id not in [OWNER_ID, SECOND_OWNER]:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
 
@@ -735,123 +745,13 @@ async def debug_env(update: Update, context: ContextTypes.DEFAULT_TYPE):
     debug_info += f"BOT_TOKEN: {'✅ Set' if BOT_TOKEN else '❌ Missing'}\n"
     debug_info += f"CHANNEL_ID: {CHANNEL_ID}\n"
     debug_info += f"OWNER_ID: {OWNER_ID}\n"
+    debug_info += f"SECOND_OWNER: {SECOND_OWNER}\n"
     debug_info += f"DISCUSSION_GROUP_ID: {DISCUSSION_GROUP_ID}\n"
     debug_info += f"QUESTIONS_JSON_URL: {QUESTIONS_JSON_URL}\n"
     debug_info += f"Questions loaded: {len(questions)}\n"
     debug_info += f"Current question: {'✅ Set' if current_question else '❌ None'}\n"
 
     await update.message.reply_text(debug_info)
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = (
-        "📚 *Help Guide* 📚\n\n"
-        "Welcome to the Quiz Bot! Here are the available commands and features:\n\n"
-        "1. `/start` - Start the weekly test (Owner only).\n"
-        "2. `/weeklytest` - Start the weekly test (Owner only, private chat).\n"
-        "3. `/test` - Send a test question to the channel (Owner only).\n"
-        "4. `/leaderboard` - Display the current leaderboard.\n"
-        "5. `/stats` - Show your quiz statistics.\n"
-        "6. `/debug` - Display debug information (Owner only).\n\n"
-        "💡 *How it works:*\n"
-        "- Daily questions are posted at 8:00 AM, 12:30 PM, and 4:20 PM (Gaza time).\n"
-        "- Weekly tests are conducted every Friday at 6:00 PM (Gaza time).\n"
-        "- Answer questions in the discussion group to earn points and climb the leaderboard!\n"
-    )
-    await update.message.reply_text(help_text, parse_mode="Markdown")
-
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🌐 Global Score", callback_data="stats_global_score")],
-        [InlineKeyboardButton("📊 My Stats", callback_data="stats_my_stats")],
-    ]
-
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "📈 *Statistics Menu* 📈\n\n"
-        "Choose an option below to view your quiz statistics:",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
-    )
-
-async def handle_stats_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = str(query.from_user.id)
-    data = query.data
-
-    if data == "stats_global_score":
-        sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
-        leaderboard_text = "🌐 *Global Leaderboard* 🌐\n\n"
-        for rank, (user_id, player) in enumerate(sorted_leaderboard, start=1):
-            leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
-        await query.edit_message_text(leaderboard_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Back", callback_data="stats_back")],
-        ]))
-
-    elif data == "stats_my_stats":
-        if user_id in leaderboard:
-            player = leaderboard[user_id]
-            total_answers = player.get("total_answers", 0)
-            correct_answers = player.get("correct_answers", 0)
-            sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
-            rank = next((i for i, (uid, _) in enumerate(sorted_leaderboard, start=1) if uid == user_id), None)
-            stats_text = (
-                f"📊 *My Stats* 📊\n\n"
-                f"👤 *User:* {player['username']}\n"
-                f"📋 *Total Questions Answered:* {total_answers}\n"
-                f"✅ *Correct Answers:* {correct_answers}\n"
-                f"🏆 *Global Rank:* {rank}\n"
-                f"🔢 *Score:* {player['score']} points\n"
-            )
-        else:
-            stats_text = "❌ You have not answered any questions yet."
-        await query.edit_message_text(stats_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Back", callback_data="stats_back")],
-        ]))
-
-    elif data == "stats_back":
-        await query.edit_message_text(
-            "📈 *Statistics Menu* 📈\n\n"
-            "Choose an option below to view your quiz statistics:",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🌐 Global Score", callback_data="stats_global_score")],
-                [InlineKeyboardButton("📊 My Stats", callback_data="stats_my_stats")],
-            ]),
-            parse_mode="Markdown"
-        )
-
-def get_utc_time(hour, minute, timezone_str):
-    tz = pytz.timezone(timezone_str)
-    local_time = datetime.now(tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
-    utc_time = local_time.astimezone(pytz.utc).time()
-    return utc_time
-
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Display rules, purpose, and help command when /start is used"""
-    start_text = (
-        "👋 Welcome to the Quiz Bot!\n\n"
-        "📜 *Rules:*\n"
-        "1. Be respectful to others.\n"
-        "2. No spamming.\n"
-        "3. Answer questions honestly.\n\n"
-        "🎯 *Purpose:*\n"
-        "This bot is designed to test your knowledge through daily and weekly quizzes. "
-        "Compete with others, climb the leaderboard, and have fun learning!\n\n"
-        "🤔 *What it does:*\n"
-        "- Posts daily questions at 8:00 AM, 12:30 PM, and 4:20 PM (Gaza time).\n"
-        "- Hosts a weekly quiz every Friday at 6:00 PM (Gaza time).\n"
-        "- Tracks your answers and scores to keep you motivated.\n\n"
-        "📢 *Groups:*\n"
-        "Join our groups to participate in quizzes and interact with other members."
-    )
-
-    keyboard = [
-        [InlineKeyboardButton("🌿 Study with Beem | English 🌿", url="https://t.me/StudyEnglishWithBeem")],
-        [InlineKeyboardButton("📖 Beem Academy | English 🎓", url="https://t.me/EnglishBeemAcademy")],
-        [InlineKeyboardButton("/help", callback_data="help_command")]
-    ]
-
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(start_text, parse_mode="Markdown", reply_markup=reply_markup)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
@@ -961,10 +861,14 @@ def main():
     application.add_handler(CommandHandler("debug", debug_env))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(CommandHandler("reload", reload))
     application.add_handler(CallbackQueryHandler(handle_stats_buttons, pattern="^(stats_global_score|stats_my_stats|stats_back)$"))
 
     # Poll answer handler
     application.add_handler(PollAnswerHandler(handle_poll_answer))
+
+    # Job queue for hourly heartbeat
+    job_queue.run_repeating(hourly_heartbeat, interval=timedelta(hours=1))
 
     # Start bot
     if WEBHOOK_URL:
