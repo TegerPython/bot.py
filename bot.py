@@ -22,6 +22,7 @@ logger.info(f"BOT_TOKEN: {BOT_TOKEN}")
 
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
+SECOND_OWNER = int(os.getenv("SECOND_OWNER"))
 DISCUSSION_GROUP_ID = int(os.getenv("DISCUSSION_GROUP_ID", "0"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
@@ -248,7 +249,7 @@ def save_leaderboard():
         logger.error(f"Error saving leaderboard to GitHub: {e}")
 
 async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
+    if update.effective_user.id != OWNER_ID and update.effective_user.id != SECOND_OWNER:
         await update.message.reply_text("You are not authorized to use this command.")
         return
     
@@ -287,9 +288,10 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     await context.bot.send_message(chat_id=OWNER_ID, text=f"Heartbeat check - Bot is alive at {now}")
+    await context.bot.send_message(chat_id=SECOND_OWNER, text=f"Heartbeat check - Bot is alive at {now}")
 
 async def set_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id != OWNER_ID:
+    if update.effective_user.id != OWNER_ID and update.effective_user.id != SECOND_OWNER:
         await update.message.reply_text("You are not authorized to use this command.")
         return
     await context.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}")
@@ -379,7 +381,7 @@ async def fetch_questions_from_url():
 
 async def start_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start test immediately (owner only)"""
-    if update.effective_chat.type != "private" or update.effective_user.id != OWNER_ID:
+    if update.effective_chat.type != "private" or (update.effective_user.id != OWNER_ID and update.effective_user.id != SECOND_OWNER):
         await update.message.reply_text("You are not authorized to use this command.")
         return
         
@@ -719,7 +721,7 @@ async def schedule_weekly_test(context):
         logger.error(f"Error scheduling weekly test: {e}")
 
 async def debug_env(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
+    if update.effective_user.id != OWNER_ID and update.effective_user.id != SECOND_OWNER:
         await update.message.reply_text("You are not authorized to use this command.")
         return
 
@@ -728,6 +730,7 @@ async def debug_env(update: Update, context: ContextTypes.DEFAULT_TYPE):
     debug_info += f"BOT_TOKEN: {'Set' if BOT_TOKEN else 'Missing'}\n"
     debug_info += f"CHANNEL_ID: {CHANNEL_ID}\n"
     debug_info += f"OWNER_ID: {OWNER_ID}\n"
+    debug_info += f"SECOND_OWNER: {SECOND_OWNER}\n"
     debug_info += f"DISCUSSION_GROUP_ID: {DISCUSSION_GROUP_ID}\n"
     debug_info += f"QUESTIONS_JSON_URL: {QUESTIONS_JSON_URL}\n"
     debug_info += f"Questions loaded: {len(questions)}\n"
@@ -846,7 +849,7 @@ def get_utc_time(hour, minute, timezone_str):
     return utc_time
 
 async def reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
+    if update.effective_user.id != OWNER_ID and update.effective_user.id != SECOND_OWNER:
         await update.message.reply_text("You are not authorized to use this command.")
         return
     await update.message.reply_text("Reloading bot and keeping the render service alive.")
