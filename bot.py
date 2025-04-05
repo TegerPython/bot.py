@@ -473,6 +473,22 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Welcome to the Quiz Bot! This bot posts daily questions and weekly tests.\n\n"
         "Type /help to see available commands."
     )
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "📚 *Help Guide* 📚\n\n"
+        "Welcome to the Quiz Bot! Here are the available commands and features:\n\n"
+        "1. `/start` - Start the weekly test (Owner only).\n"
+        "2. `/weeklytest` - Start the weekly test (Owner only, private chat).\n"
+        "3. `/test` - Send a test question to the channel (Owner only).\n"
+        "4. `/leaderboard` - Display the current leaderboard.\n"
+        "5. `/stats` - Show your quiz statistics.\n"
+        "6. `/debug` - Display debug information (Owner only).\n\n"
+        "💡 *How it works:*\n"
+        "- Daily questions are posted at 8:00 AM, 12:30 PM, and 4:20 PM (Gaza time).\n"
+        "- Weekly tests are conducted every Friday at 6:00 PM (Gaza time).\n"
+        "- Answer questions in the discussion group to earn points and climb the leaderboard!\n"
+    )
+    await update.message.reply_text(help_text, parse_mode="Markdown")
 
 def main() -> None:
     application = Application.builder().token(BOT_TOKEN).build()
