@@ -467,6 +467,12 @@ async def end_weekly_test(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.error(f"Failed to send results: {e}")
 
     await delete_channel_messages(context)
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the /start command."""
+    await update.message.reply_text(
+        "Welcome to the Quiz Bot! This bot posts daily questions and weekly tests.\n\n"
+        "Type /help to see available commands."
+    )
 
 def main() -> None:
     application = Application.builder().token(BOT_TOKEN).build()
