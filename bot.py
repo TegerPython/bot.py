@@ -241,6 +241,7 @@ def save_leaderboard():
             "sha": sha,
             "branch": "main",  # Or your branch name
         }
+        update_response = requests.put(update_url, headers=headers, json=data)
         update_response.raise_for_status()
 
         logger.info("Leaderboard saved successfully to GitHub.")
@@ -371,7 +372,7 @@ async def fetch_questions_from_url():
             
         async with aiohttp.ClientSession() as session:
             async with session.get(WEEKLY_QUESTIONS_JSON_URL) as response:
-                if response.status == 200:
+                if response.status == 200):
                     text_content = await response.text()
                     try:
                         data = json.loads(text_content)
