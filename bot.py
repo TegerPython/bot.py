@@ -852,6 +852,10 @@ def get_utc_time(hour, minute, timezone_str):
     utc_time = local_time.astimezone(pytz.utc).time()
     return utc_time
 
+async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    await context.bot.send_message(chat_id=OWNER_ID, text=f"Heartbeat check - Bot is alive at {now}")
+
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     job_queue = application.job_queue
@@ -860,6 +864,9 @@ def main():
     job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
     job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
     job_queue.run_daily(send_question, get_utc_time(16, 20, "Asia/Gaza"), name="third_question")  # Set to 4:20 PM for testing
+
+    # Schedule hourly heartbeat
+    job_queue.run_repeating(heartbeat, interval=3600, first=0, name="hourly_heartbeat")
 
     # Weekly test scheduling
     job_queue.run_once(
