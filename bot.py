@@ -241,7 +241,7 @@ def save_leaderboard():
             "sha": sha,
             "branch": "main",  # Or your branch name
         }
-        update_response = requests.put(update_url, headers=headers, json(data))
+        update_response = requests.put(update_url, headers=headers, json(data)
         update_response.raise_for_status()
 
         logger.info("Leaderboard saved successfully to GitHub.")
