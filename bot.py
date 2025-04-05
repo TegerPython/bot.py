@@ -825,6 +825,124 @@ def get_utc_time(hour, minute, timezone_str):
     utc_time = local_time.astimezone(pytz.utc).time()
     return utc_time
 
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Display rules, purpose, and help command when /start is used"""
+    start_text = (
+        "👋 Welcome to the Quiz Bot!\n\n"
+        "📜 *Rules:*\n"
+        "1. Be respectful to others.\n"
+        "2. No spamming.\n"
+        "3. Answer questions honestly.\n\n"
+        "🎯 *Purpose:*\n"
+        "This bot is designed to test your knowledge through daily and weekly quizzes. "
+        "Compete with others, climb the leaderboard, and have fun learning!\n\n"
+        "🤔 *What it does:*\n"
+        "- Posts daily questions at 8:00 AM, 12:30 PM, and 4:20 PM (Gaza time).\n"
+        "- Hosts a weekly quiz every Friday at 6:00 PM (Gaza time).\n"
+        "- Tracks your answers and scores to keep you motivated.\n\n"
+        "📢 *Groups:*\n"
+        "Join our groups to participate in quizzes and interact with other members."
+    )
+
+    keyboard = [
+        [InlineKeyboardButton("🌿 Study with Beem | English 🌿", url="https://t.me/StudyEnglishWithBeem")],
+        [InlineKeyboardButton("📖 Beem Academy | English 🎓", url="https://t.me/EnglishBeemAcademy")],
+        [InlineKeyboardButton("/help", callback_data="help_command")]
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(start_text, parse_mode="Markdown", reply_markup=reply_markup)
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "📚 *Help Guide* 📚\n\n"
+        "Welcome to the Quiz Bot! Here are the available commands and features:\n\n"
+        "1. `/start` - Start the weekly test (Owner only).\n"
+        "2. `/weeklytest` - Start the weekly test (Owner only, private chat).\n"
+        "3. `/test` - Send a test question to the channel (Owner only).\n"
+        "4. `/leaderboard` - Display the current leaderboard.\n"
+        "5. `/stats` - Show your quiz statistics.\n"
+        "6. `/debug` - Display debug information (Owner only).\n\n"
+        "💡 *How it works:*\n"
+        "- Daily questions are posted at 8:00 AM, 12:30 PM, and 4:20 PM (Gaza time).\n"
+        "- Weekly tests are conducted every Friday at 6:00 PM (Gaza time).\n"
+        "- Answer questions in the discussion group to earn points and climb the leaderboard!\n"
+    )
+    await update.message.reply_text(help_text, parse_mode="Markdown")
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("🌐 Global Score", callback_data="stats_global_score")],
+        [InlineKeyboardButton("📊 My Stats", callback_data="stats_my_stats")],
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "📈 *Statistics Menu* 📈\n\n"
+        "Choose an option below to view your quiz statistics:",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+
+async def handle_stats_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = str(query.from_user.id)
+    data = query.data
+
+    if data == "stats_global_score":
+        sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
+        leaderboard_text = "🌐 *Global Leaderboard* 🌐\n\n"
+        for rank, (user_id, player) in enumerate(sorted_leaderboard, start=1):
+            leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
+        await query.edit_message_text(leaderboard_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back", callback_data="stats_back")],
+        ]))
+
+    elif data == "stats_my_stats":
+        if user_id in leaderboard:
+            player = leaderboard[user_id]
+            total_answers = player.get("total_answers", 0)
+            correct_answers = player.get("correct_answers", 0)
+            sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
+            rank = next((i for i, (uid, _) in enumerate(sorted_leaderboard, start=1) if uid == user_id), None)
+            stats_text = (
+                f"📊 *My Stats* 📊\n\n"
+                f"👤 *User:* {player['username']}\n"
+                f"📋 *Total Questions Answered:* {total_answers}\n"
+                f"✅ *Correct Answers:* {correct_answers}\n"
+                f"🏆 *Global Rank:* {rank}\n"
+                f"🔢 *Score:* {player['score']} points\n"
+            )
+        else:
+            stats_text = "❌ You have not answered any questions yet."
+        await query.edit_message_text(stats_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back", callback_data="stats_back")],
+        ]))
+
+    elif data == "stats_back":
+        await query.edit_message_text(
+            "📈 *Statistics Menu* 📈\n\n"
+            "Choose an option below to view your quiz statistics:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🌐 Global Score", callback_data="stats_global_score")],
+                [InlineKeyboardButton("📊 My Stats", callback_data="stats_my_stats")],
+            ]),
+            parse_mode="Markdown"
+        )
+
+def get_utc_time(hour, minute, timezone_str):
+    tz = pytz.timezone(timezone_str)
+    local_time = datetime.now(tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    utc_time = local_time.astimezone(pytz.utc).time()
+    return utc_time
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the /start command."""
+    await update.message.reply_text(
+        "Welcome to the Quiz Bot! This bot posts daily questions and weekly tests.\n\n"
+        "Type /help to see available commands."
+    )
+
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     job_queue = application.job_queue
