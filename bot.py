@@ -240,7 +240,7 @@ def save_leaderboard():
             "sha": sha,
             "branch": "main",  # Or your branch name
         }
-        update_response = requests.put(update_url, headers=headers, json(data))
+        update_response = requests.put(update_url, json=data, headers=headers)
         update_response.raise_for_status()
 
         logger.info("Leaderboard saved successfully to GitHub.")
@@ -454,18 +454,11 @@ async def send_weekly_question(context, question_index):
         weekly_test.poll_ids[question_index] = group_message.poll.id
         weekly_test.poll_messages[question_index] = group_message.message_id
         
-        # Prepare channel message with dynamic timing
-        time_emoji = "⏱️"
-        if QUESTION_DURATION <= 10:
-            time_emoji = "🚨"
-        elif QUESTION_DURATION <= 20:
-            time_emoji = "⏳"
-        
         # Send channel announcement
         channel_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text=f"QUESTION {question_index + 1} IS LIVE!\n\n"
-                 f"{time_emoji} Hurry! Only {QUESTION_DURATION} seconds to answer!\n"
+                 f"⏱️ Hurry! Only {QUESTION_DURATION} seconds to answer!\n"
                  "Test your knowledge and earn points!\n\n",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
