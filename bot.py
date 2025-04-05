@@ -22,7 +22,7 @@ logger.info(f"BOT_TOKEN: {BOT_TOKEN}")
 
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID"))
-SECOND_OWNER = int(os.getenv("SECOND_OWNER"))  # Add this line
+SECOND_OWNER = int(os.getenv("SECOND_OWNER"))
 DISCUSSION_GROUP_ID = int(os.getenv("DISCUSSION_GROUP_ID", "0"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 QUESTIONS_JSON_URL = os.getenv("QUESTIONS_JSON_URL")
@@ -241,7 +241,6 @@ def save_leaderboard():
             "sha": sha,
             "branch": "main",  # Or your branch name
         }
-        update_response = requests.put(update_url, headers=headers, json=data)
         update_response.raise_for_status()
 
         logger.info("Leaderboard saved successfully to GitHub.")
