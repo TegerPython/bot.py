@@ -960,7 +960,7 @@ def main():
     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
     application.add_handler(CommandHandler("debug", debug_env))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandlera("stats", stats_command))
+    application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CallbackQueryHandler(handle_stats_buttons, pattern="^(stats_global_score|stats_my_stats|stats_back)$"))
 
     # Poll answer handler
