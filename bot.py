@@ -942,6 +942,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
          )
      else:
          application.run_polling(drop_pending_updates=True)
- 
- if __name__ == "__main__":
-     main()
+
+if __name__ == "__main__":
+    main()
