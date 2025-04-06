@@ -896,7 +896,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
- def main():
+def main():
      application = Application.builder().token(BOT_TOKEN).build()
      job_queue = application.job_queue
  
