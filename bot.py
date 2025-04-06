@@ -916,6 +916,6 @@ def main():
          )
      else:
          application.run_polling(drop_pending_updates=True)
- 
- if __name__ == "__main__":
-     main()
+
+if __name__ == "__main__":
+    main()
