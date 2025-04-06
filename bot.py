@@ -871,7 +871,32 @@ async def reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text("Reloading bot and keeping the render service alive.")
 
-def main():
+async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global leaderboard
+    for user_id in leaderboard:
+        leaderboard[user_id]['score'] = 0
+        leaderboard[user_id]['total_answers'] = 0
+        leaderboard[user_id]['correct_answers'] = 0
+    save_leaderboard()
+    await update.message.reply_text("Leaderboard has been reset.")
+
+# Update the help_command function
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "Help Guide\n\n"
+        "Welcome to the Quiz Bot! Here are the available commands and features:\n\n"
+        "1. /start - Display rules, purpose, and help command information.\n"
+        "2. /leaderboard - Display the current leaderboard.\n"
+        "3. /stats - Show your quiz statistics.\n"
+        "4. /reset - Reset all scores to 0 in the leaderboard.\n\n"
+        "How it works:\n"
+        "- Daily questions are posted at 8:00 AM, 12:30 PM, and 4:20 PM (Gaza time).\n"
+        "- Weekly tests are conducted every Friday at 6:00 PM (Gaza time).\n"
+        "- Answer questions in the discussion group to earn points and climb the leaderboard!\n"
+    )
+    await update.message.reply_text(help_text, parse_mode="Markdown")
+
+ def main():
      application = Application.builder().token(BOT_TOKEN).build()
      job_queue = application.job_queue
  
@@ -900,6 +925,7 @@ def main():
      application.add_handler(CommandHandler("stats", stats_command))
      application.add_handler(CommandHandler("reload", reload_command))
      application.add_handler(CommandHandler("help", help_command))  # Add this line
+     application.add_handler(CommandHandler("reset", reset_command))  # Add this line
      application.add_handler(CallbackQueryHandler(handle_stats_buttons, pattern="^(stats_global_score|stats_my_stats|stats_back)$"))
  
      # Poll answer handler
@@ -916,6 +942,6 @@ def main():
          )
      else:
          application.run_polling(drop_pending_updates=True)
-
-if __name__ == "__main__":
-    main()
+ 
+ if __name__ == "__main__":
+     main()
