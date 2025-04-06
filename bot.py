@@ -871,7 +871,13 @@ async def reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text("Reloading bot and keeping the render service alive.")
 
+# Add the following new function above main()
+
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID and update.effective_user.id != SECOND_OWNER:
+        await update.message.reply_text("You are not authorized to use this command.")
+        return
+
     global leaderboard
     for user_id in leaderboard:
         leaderboard[user_id]['score'] = 0
@@ -887,8 +893,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Welcome to the Quiz Bot! Here are the available commands and features:\n\n"
         "1. /start - Display rules, purpose, and help command information.\n"
         "2. /leaderboard - Display the current leaderboard.\n"
-        "3. /stats - Show your quiz statistics.\n"
-        "4. /reset - Reset all scores to 0 in the leaderboard.\n\n"
+        "3. /stats - Show your quiz statistics.\n\n"
         "How it works:\n"
         "- Daily questions are posted at 8:00 AM, 12:30 PM, and 4:20 PM (Gaza time).\n"
         "- Weekly tests are conducted every Friday at 6:00 PM (Gaza time).\n"
@@ -896,52 +901,53 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
+# Ensure the main function registers the /reset command handler
 def main():
-     application = Application.builder().token(BOT_TOKEN).build()
-     job_queue = application.job_queue
- 
-     # Schedule daily questions
-     job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
-     job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
-     job_queue.run_daily(send_question, get_utc_time(16, 20, "Asia/Gaza"), name="third_question")
- 
-     # Schedule hourly heartbeat
-     job_queue.run_repeating(heartbeat, interval=3600, first=0, name="hourly_heartbeat")
- 
-     # Weekly test scheduling
-     job_queue.run_once(
-         lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
-         5,  # Initial delay to let the bot start
-         name="initial_schedule"
-     )
- 
-     # Command handlers
-     application.add_handler(CallbackQueryHandler(handle_answer, pattern="^answer_"))
-     application.add_handler(CommandHandler("start", start_command))
-     application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
-     application.add_handler(CommandHandler("test", test_question))
-     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
-     application.add_handler(CommandHandler("debug", debug_env))
-     application.add_handler(CommandHandler("stats", stats_command))
-     application.add_handler(CommandHandler("reload", reload_command))
-     application.add_handler(CommandHandler("help", help_command))  # Add this line
-     application.add_handler(CommandHandler("reset", reset_command))  # Add this line
-     application.add_handler(CallbackQueryHandler(handle_stats_buttons, pattern="^(stats_global_score|stats_my_stats|stats_back)$"))
- 
-     # Poll answer handler
-     application.add_handler(PollAnswerHandler(handle_poll_answer))
- 
-     # Start bot
-     if WEBHOOK_URL:
-         application.run_webhook(
-             listen="0.0.0.0",
-             port=PORT,
-             url_path=BOT_TOKEN,
-             webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-             drop_pending_updates=True
-         )
-     else:
-         application.run_polling(drop_pending_updates=True)
+    application = Application.builder().token(BOT_TOKEN).build()
+    job_queue = application.job_queue
+
+    # Schedule daily questions
+    job_queue.run_daily(send_question, get_utc_time(8, 0, "Asia/Gaza"))
+    job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
+    job_queue.run_daily(send_question, get_utc_time(16, 20, "Asia/Gaza"), name="third_question")
+
+    # Schedule hourly heartbeat
+    job_queue.run_repeating(heartbeat, interval=3600, first=0, name="hourly_heartbeat")
+
+    # Weekly test scheduling
+    job_queue.run_once(
+        lambda ctx: asyncio.create_task(schedule_weekly_test(ctx)),
+        5,  # Initial delay to let the bot start
+        name="initial_schedule"
+    )
+
+    # Command handlers
+    application.add_handler(CallbackQueryHandler(handle_answer, pattern="^answer_"))
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("weeklytest", start_test_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("test", test_question))
+    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
+    application.add_handler(CommandHandler("debug", debug_env))
+    application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(CommandHandler("reload", reload_command))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("reset", reset_command))
+    application.add_handler(CallbackQueryHandler(handle_stats_buttons, pattern="^(stats_global_score|stats_my_stats|stats_back)$"))
+
+    # Poll answer handler
+    application.add_handler(PollAnswerHandler(handle_poll_answer))
+
+    # Start bot
+    if WEBHOOK_URL:
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=BOT_TOKEN,
+            webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+            drop_pending_updates=True
+        )
+    else:
+        application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
