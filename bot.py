@@ -829,6 +829,111 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Welcome to the Quiz Bot! This bot posts daily questions and weekly tests.\n\n"
         "Type /help to see available commands."
     )
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Display user statistics"""
+    user_id = str(update.effective_user.id)
+    user_name = update.effective_user.first_name
+    
+    # Create stats message
+    if user_id in leaderboard:
+        user_data = leaderboard[user_id]
+        total_answers = user_data.get("total_answers", 0)
+        correct_answers = user_data.get("correct_answers", 0)
+        accuracy = (correct_answers / total_answers * 100) if total_answers > 0 else 0
+        
+        stats_text = (
+            f"📊 *Your Stats*\n\n"
+            f"*Name:* {user_data.get('username', user_name)}\n"
+            f"*Score:* {user_data.get('score', 0)} points\n"
+            f"*Total Answers:* {total_answers}\n"
+            f"*Correct Answers:* {correct_answers}\n"
+            f"*Accuracy:* {accuracy:.1f}%\n"
+        )
+    else:
+        stats_text = (
+            f"📊 *Your Stats*\n\n"
+            f"*Name:* {user_name}\n"
+            f"You haven't answered any questions yet!\n"
+            f"Participate in our daily challenges and weekly tests to earn points."
+        )
+    
+    # Create inline keyboard
+    keyboard = [
+        [InlineKeyboardButton("🌍 Global Leaderboard", callback_data="stats_global_score")],
+        [InlineKeyboardButton("📈 My Stats Detail", callback_data="stats_my_stats")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(stats_text, parse_mode="Markdown", reply_markup=reply_markup)
+
+async def handle_stats_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle stats button callbacks"""
+    query = update.callback_query
+    user_id = str(query.from_user.id)
+    user_name = query.from_user.first_name
+    
+    await query.answer()
+    
+    if query.data == "stats_global_score":
+        # Show global leaderboard
+        sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
+        leaderboard_text = "🏆 *Global Leaderboard* 🏆\n\n"
+        
+        # Find user's rank
+        user_rank = next((i for i, (uid, _) in enumerate(sorted_leaderboard, 1) if uid == user_id), None)
+        
+        # Display top 10
+        for rank, (uid, player) in enumerate(sorted_leaderboard[:10], start=1):
+            if uid == user_id:
+                leaderboard_text += f"*{rank}. {player['username']}: {player['score']} points* 👈\n"
+            else:
+                leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
+        
+        # If user is not in top 10, add their position
+        if user_rank and user_rank > 10:
+            leaderboard_text += f"\n...\n\n*{user_rank}. {leaderboard[user_id]['username']}: {leaderboard[user_id]['score']} points* 👈\n"
+        
+        keyboard = [[InlineKeyboardButton("◀️ Back", callback_data="stats_back")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(leaderboard_text, parse_mode="Markdown", reply_markup=reply_markup)
+    
+    elif query.data == "stats_my_stats":
+        # Show detailed stats
+        if user_id in leaderboard:
+            user_data = leaderboard[user_id]
+            total_answers = user_data.get("total_answers", 0)
+            correct_answers = user_data.get("correct_answers", 0)
+            accuracy = (correct_answers / total_answers * 100) if total_answers > 0 else 0
+            
+            # Calculate rank
+            sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
+            user_rank = next((i for i, (uid, _) in enumerate(sorted_leaderboard, 1) if uid == user_id), "N/A")
+            
+            stats_text = (
+                f"📊 *Detailed Stats for {user_data.get('username', user_name)}*\n\n"
+                f"*Rank:* #{user_rank} of {len(leaderboard)}\n"
+                f"*Total Score:* {user_data.get('score', 0)} points\n"
+                f"*Questions Answered:* {total_answers}\n"
+                f"*Correct Answers:* {correct_answers}\n"
+                f"*Incorrect Answers:* {total_answers - correct_answers}\n"
+                f"*Accuracy:* {accuracy:.1f}%\n"
+            )
+        else:
+            stats_text = (
+                f"📊 *Detailed Stats for {user_name}*\n\n"
+                f"You haven't answered any questions yet!\n"
+                f"Participate in our daily challenges and weekly tests to earn points."
+            )
+        
+        keyboard = [[InlineKeyboardButton("◀️ Back", callback_data="stats_back")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(stats_text, parse_mode="Markdown", reply_markup=reply_markup)
+    
+    elif query.data == "stats_back":
+        # Return to main stats view
+        await stats_command(update, context)
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
