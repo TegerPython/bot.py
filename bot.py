@@ -812,6 +812,79 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
+async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID and update.effective_user.id != SECOND_OWNER:
+        await update.message.reply_text("You are not authorized to use this command.")
+        return
+
+    global leaderboard
+    for user_id in leaderboard:
+        leaderboard[user_id]['score'] = 0
+        leaderboard[user_id]['total_answers'] = 0
+        leaderboard[user_id]['correct_answers'] = 0
+    save_leaderboard()
+    await update.message.reply_text("Leaderboard has been reset.")
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("🌐 Global Score", callback_data="stats_global_score")],
+        [InlineKeyboardButton("📊 My Stats", callback_data="stats_my_stats")],
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "Statistics Menu\n\n"
+        "Choose an option below to view your quiz statistics:",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+
+async def handle_stats_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = str(query.from_user.id)
+    data = query.data
+
+    if data == "stats_global_score":
+        sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
+        leaderboard_text = "Global Leaderboard\n\n"
+        for rank, (user_id, player) in enumerate(sorted_leaderboard, start=1):
+            leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
+        await query.edit_message_text(leaderboard_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Back", callback_data="stats_back")],
+        ]))
+
+    elif data == "stats_my_stats":
+        if user_id in leaderboard:
+            player = leaderboard[user_id]
+            total_answers = player.get("total_answers", 0)
+            correct_answers = player.get("correct_answers", 0)
+            sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
+            rank = next((i for i, (uid, _) in enumerate(sorted_leaderboard, start=1) if uid == user_id), None)
+            stats_text = (
+                f"My Stats\n\n"
+                f"User: {player['username']}\n"
+                f"Total Questions Answered: {total_answers}\n"
+                f"Correct Answers: {correct_answers}\n"
+                f"Global Rank: {rank}\n"
+                f"Score: {player['score']} points\n"
+            )
+        else:
+            stats_text = "You have not answered any questions yet."
+        await query.edit_message_text(stats_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Back", callback_data="stats_back")],
+        ]))
+
+    elif data == "stats_back":
+        await query.edit_message_text(
+            "Statistics Menu\n\n"
+            "Choose an option below to view your quiz statistics:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Global Score", callback_data="stats_global_score")],
+                [InlineKeyboardButton("My Stats", callback_data="stats_my_stats")],
+            ]),
+            parse_mode="Markdown"
+        )
+
 def get_utc_time(hour, minute, timezone_str):
     tz = pytz.timezone(timezone_str)
     local_time = datetime.now(tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -823,117 +896,6 @@ async def reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("You are not authorized to use this command.")
         return
     await update.message.reply_text("Reloading bot and keeping the render service alive.")
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the /start command."""
-    await update.message.reply_text(
-        "Welcome to the Quiz Bot! This bot posts daily questions and weekly tests.\n\n"
-        "Type /help to see available commands."
-    )
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Display user statistics"""
-    user_id = str(update.effective_user.id)
-    user_name = update.effective_user.first_name
-    
-    # Create stats message
-    if user_id in leaderboard:
-        user_data = leaderboard[user_id]
-        total_answers = user_data.get("total_answers", 0)
-        correct_answers = user_data.get("correct_answers", 0)
-        accuracy = (correct_answers / total_answers * 100) if total_answers > 0 else 0
-        
-        stats_text = (
-            f"📊 *Your Stats*\n\n"
-            f"*Name:* {user_data.get('username', user_name)}\n"
-            f"*Score:* {user_data.get('score', 0)} points\n"
-            f"*Total Answers:* {total_answers}\n"
-            f"*Correct Answers:* {correct_answers}\n"
-            f"*Accuracy:* {accuracy:.1f}%\n"
-        )
-    else:
-        stats_text = (
-            f"📊 *Your Stats*\n\n"
-            f"*Name:* {user_name}\n"
-            f"You haven't answered any questions yet!\n"
-            f"Participate in our daily challenges and weekly tests to earn points."
-        )
-    
-    # Create inline keyboard
-    keyboard = [
-        [InlineKeyboardButton("🌍 Global Leaderboard", callback_data="stats_global_score")],
-        [InlineKeyboardButton("📈 My Stats Detail", callback_data="stats_my_stats")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(stats_text, parse_mode="Markdown", reply_markup=reply_markup)
-
-async def handle_stats_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle stats button callbacks"""
-    query = update.callback_query
-    user_id = str(query.from_user.id)
-    user_name = query.from_user.first_name
-    
-    await query.answer()
-    
-    if query.data == "stats_global_score":
-        # Show global leaderboard
-        sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
-        leaderboard_text = "🏆 *Global Leaderboard* 🏆\n\n"
-        
-        # Find user's rank
-        user_rank = next((i for i, (uid, _) in enumerate(sorted_leaderboard, 1) if uid == user_id), None)
-        
-        # Display top 10
-        for rank, (uid, player) in enumerate(sorted_leaderboard[:10], start=1):
-            if uid == user_id:
-                leaderboard_text += f"*{rank}. {player['username']}: {player['score']} points* 👈\n"
-            else:
-                leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
-        
-        # If user is not in top 10, add their position
-        if user_rank and user_rank > 10:
-            leaderboard_text += f"\n...\n\n*{user_rank}. {leaderboard[user_id]['username']}: {leaderboard[user_id]['score']} points* 👈\n"
-        
-        keyboard = [[InlineKeyboardButton("◀️ Back", callback_data="stats_back")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(leaderboard_text, parse_mode="Markdown", reply_markup=reply_markup)
-    
-    elif query.data == "stats_my_stats":
-        # Show detailed stats
-        if user_id in leaderboard:
-            user_data = leaderboard[user_id]
-            total_answers = user_data.get("total_answers", 0)
-            correct_answers = user_data.get("correct_answers", 0)
-            accuracy = (correct_answers / total_answers * 100) if total_answers > 0 else 0
-            
-            # Calculate rank
-            sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
-            user_rank = next((i for i, (uid, _) in enumerate(sorted_leaderboard, 1) if uid == user_id), "N/A")
-            
-            stats_text = (
-                f"📊 *Detailed Stats for {user_data.get('username', user_name)}*\n\n"
-                f"*Rank:* #{user_rank} of {len(leaderboard)}\n"
-                f"*Total Score:* {user_data.get('score', 0)} points\n"
-                f"*Questions Answered:* {total_answers}\n"
-                f"*Correct Answers:* {correct_answers}\n"
-                f"*Incorrect Answers:* {total_answers - correct_answers}\n"
-                f"*Accuracy:* {accuracy:.1f}%\n"
-            )
-        else:
-            stats_text = (
-                f"📊 *Detailed Stats for {user_name}*\n\n"
-                f"You haven't answered any questions yet!\n"
-                f"Participate in our daily challenges and weekly tests to earn points."
-            )
-        
-        keyboard = [[InlineKeyboardButton("◀️ Back", callback_data="stats_back")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(stats_text, parse_mode="Markdown", reply_markup=reply_markup)
-    
-    elif query.data == "stats_back":
-        # Return to main stats view
-        await stats_command(update, context)
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
@@ -944,8 +906,8 @@ def main():
     job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
     job_queue.run_daily(send_question, get_utc_time(16, 20, "Asia/Gaza"), name="third_question")
 
-    # Schedule hourly heartbeat
-    job_queue.run_repeating(heartbeat, interval=3600, first=0, name="hourly_heartbeat")
+    # Schedule minute heartbeat
+    job_queue.run_repeating(heartbeat, interval=60, first=0, name="minute_heartbeat")
 
     # Weekly test scheduling
     job_queue.run_once(
@@ -963,6 +925,8 @@ def main():
     application.add_handler(CommandHandler("debug", debug_env))
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("reload", reload_command))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("reset", reset_command))
     application.add_handler(CallbackQueryHandler(handle_stats_buttons, pattern="^(stats_global_score|stats_my_stats|stats_back)$"))
 
     # Poll answer handler
