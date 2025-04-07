@@ -812,6 +812,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
+def get_utc_time(hour, minute, timezone_str):
+    tz = pytz.timezone(timezone_str)
+    local_time = datetime.now(tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    utc_time = local_time.astimezone(pytz.utc).time()
+    return utc_time
+
 async def reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID and update.effective_user.id != SECOND_OWNER:
         await update.message.reply_text("You are not authorized to use this command.")
