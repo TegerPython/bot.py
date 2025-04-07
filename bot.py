@@ -911,8 +911,8 @@ def main():
     job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
     job_queue.run_daily(send_question, get_utc_time(16, 20, "Asia/Gaza"), name="third_question")
 
-    # Schedule hourly heartbeat
-    job_queue.run_repeating(heartbeat, interval=3600, first=0, name="hourly_heartbeat")
+    # Schedule heartbeat every minute
+    job_queue.run_repeating(heartbeat, interval=60, first=0, name="minute_heartbeat")
 
     # Weekly test scheduling
     job_queue.run_once(
