@@ -125,8 +125,16 @@ load_questions()
 load_leaderboard()
 load_weekly_questions()
 
+def save_questions():
+    try:
+        with open('questions.json', 'w') as f:
+            json.dump(questions, f, indent=4)
+        logger.info("Questions saved successfully.")
+    except Exception as e:
+        logger.error(f"Error saving questions: {e}")
+
 async def send_question(context: ContextTypes.DEFAULT_TYPE):
-    global current_question, answered_users, current_message_id, used_daily_questions, next_daily_question_index
+    global current_question, answered_users, current_message_id, used_daily_questions, next_daily_question_index, questions
     answered_users = set()
     if not questions:
         logger.error("send_question: No questions available")
@@ -139,6 +147,10 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
     current_question = questions[next_daily_question_index]
     used_daily_questions.add(current_question["id"])
     next_daily_question_index += 1
+
+    # Remove the question from the list and save
+    questions = questions[1:]
+    save_questions()
 
     keyboard = [[InlineKeyboardButton(option, callback_data=f"answer_{option}")] for option in current_question.get("options", [])]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -274,6 +286,10 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     used_daily_questions.add(current_question["id"])
     next_daily_question_index += 1
     
+    # Remove the question from the list and save
+    questions = questions[1:]
+    save_questions()
+
     try:
         keyboard = [[InlineKeyboardButton(option, callback_data=f"answer_{option}")] for option in current_question.get("options", [])]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -786,111 +802,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "Help Guide\n\n"
         "Welcome to the Quiz Bot! Here are the available commands and features:\n\n"
-        "1. /start - Start the weekly test (Owner only).\n"
-        "2. /weeklytest - Start the weekly test (Owner only, private chat).\n"
-        "3. /test - Send a test question to the channel (Owner only).\n"
-        "4. /leaderboard - Display the current leaderboard.\n"
-        "5. /stats - Show your quiz statistics.\n"
-        "6. /debug - Display debug information (Owner only).\n\n"
-        "How it works:\n"
-        "- Daily questions are posted at 8:00 AM, 12:30 PM, and 4:20 PM (Gaza time).\n"
-        "- Weekly tests are conducted every Friday at 6:00 PM (Gaza time).\n"
-        "- Answer questions in the discussion group to earn points and climb the leaderboard!\n"
-    )
-    await update.message.reply_text(help_text, parse_mode="Markdown")
-
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🌐 Global Score", callback_data="stats_global_score")],
-        [InlineKeyboardButton("📊 My Stats", callback_data="stats_my_stats")],
-    ]
-
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "Statistics Menu\n\n"
-        "Choose an option below to view your quiz statistics:",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
-    )
-
-async def handle_stats_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = str(query.from_user.id)
-    data = query.data
-
-    if data == "stats_global_score":
-        sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
-        leaderboard_text = "Global Leaderboard\n\n"
-        for rank, (user_id, player) in enumerate(sorted_leaderboard, start=1):
-            leaderboard_text += f"{rank}. {player['username']}: {player['score']} points\n"
-        await query.edit_message_text(leaderboard_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Back", callback_data="stats_back")],
-        ]))
-
-    elif data == "stats_my_stats":
-        if user_id in leaderboard:
-            player = leaderboard[user_id]
-            total_answers = player.get("total_answers", 0)
-            correct_answers = player.get("correct_answers", 0)
-            sorted_leaderboard = sorted(leaderboard.items(), key=lambda item: item[1]["score"], reverse=True)
-            rank = next((i for i, (uid, _) in enumerate(sorted_leaderboard, start=1) if uid == user_id), None)
-            stats_text = (
-                f"My Stats\n\n"
-                f"User: {player['username']}\n"
-                f"Total Questions Answered: {total_answers}\n"
-                f"Correct Answers: {correct_answers}\n"
-                f"Global Rank: {rank}\n"
-                f"Score: {player['score']} points\n"
-            )
-        else:
-            stats_text = "You have not answered any questions yet."
-        await query.edit_message_text(stats_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Back", callback_data="stats_back")],
-        ]))
-
-    elif data == "stats_back":
-        await query.edit_message_text(
-            "Statistics Menu\n\n"
-            "Choose an option below to view your quiz statistics:",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Global Score", callback_data="stats_global_score")],
-                [InlineKeyboardButton("My Stats", callback_data="stats_my_stats")],
-            ]),
-            parse_mode="Markdown"
-        )
-
-def get_utc_time(hour, minute, timezone_str):
-    tz = pytz.timezone(timezone_str)
-    local_time = datetime.now(tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
-    utc_time = local_time.astimezone(pytz.utc).time()
-    return utc_time
-
-async def reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID and update.effective_user.id != SECOND_OWNER:
-        await update.message.reply_text("You are not authorized to use this command.")
-        return
-    await update.message.reply_text("Reloading bot and keeping the render service alive.")
-
-# Add the following new function above main()
-
-async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID and update.effective_user.id != SECOND_OWNER:
-        await update.message.reply_text("You are not authorized to use this command.")
-        return
-
-    global leaderboard
-    for user_id in leaderboard:
-        leaderboard[user_id]['score'] = 0
-        leaderboard[user_id]['total_answers'] = 0
-        leaderboard[user_id]['correct_answers'] = 0
-    save_leaderboard()
-    await update.message.reply_text("Leaderboard has been reset.")
-
-# Update the help_command function
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = (
-        "Help Guide\n\n"
-        "Welcome to the Quiz Bot! Here are the available commands and features:\n\n"
         "1. /start - Display rules, purpose, and help command information.\n"
         "2. /leaderboard - Display the current leaderboard.\n"
         "3. /stats - Show your quiz statistics.\n\n"
@@ -901,7 +812,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
-# Ensure the main function registers the /reset command handler
+async def reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID and update.effective_user.id != SECOND_OWNER:
+        await update.message.reply_text("You are not authorized to use this command.")
+        return
+    await update.message.reply_text("Reloading bot and keeping the render service alive.")
+
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     job_queue = application.job_queue
