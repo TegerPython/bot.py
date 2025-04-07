@@ -823,6 +823,12 @@ async def reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("You are not authorized to use this command.")
         return
     await update.message.reply_text("Reloading bot and keeping the render service alive.")
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the /start command."""
+    await update.message.reply_text(
+        "Welcome to the Quiz Bot! This bot posts daily questions and weekly tests.\n\n"
+        "Type /help to see available commands."
+    )
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
