@@ -149,7 +149,7 @@ async def send_question(context: ContextTypes.DEFAULT_TYPE):
     next_daily_question_index += 1
 
     # Remove the question from the list and save
-    questions = questions[1:]
+    questions.pop(0)
     save_questions()
 
     keyboard = [[InlineKeyboardButton(option, callback_data=f"answer_{option}")] for option in current_question.get("options", [])]
@@ -287,7 +287,7 @@ async def test_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     next_daily_question_index += 1
     
     # Remove the question from the list and save
-    questions = questions[1:]
+    questions.pop(0)
     save_questions()
 
     try:
@@ -833,8 +833,8 @@ def main():
     job_queue.run_daily(send_question, get_utc_time(12, 30, "Asia/Gaza"), name="second_question")
     job_queue.run_daily(send_question, get_utc_time(16, 20, "Asia/Gaza"), name="third_question")
 
-    # Schedule heartbeat every minute
-    job_queue.run_repeating(heartbeat, interval=60, first=0, name="minute_heartbeat")
+    # Schedule hourly heartbeat
+    job_queue.run_repeating(heartbeat, interval=3600, first=0, name="hourly_heartbeat")
 
     # Weekly test scheduling
     job_queue.run_once(
@@ -852,8 +852,6 @@ def main():
     application.add_handler(CommandHandler("debug", debug_env))
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("reload", reload_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("reset", reset_command))
     application.add_handler(CallbackQueryHandler(handle_stats_buttons, pattern="^(stats_global_score|stats_my_stats|stats_back)$"))
 
     # Poll answer handler
